@@ -1,0 +1,35 @@
+name: Build INAV SpeedyBee RUNA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone INAV 8.0.1
+        run: |
+          git clone --branch 8.0.1 --depth 1 https://github.com/iNavFlight/inav.git
+
+      - name: Patch name
+        run: |
+          cd inav
+          sed -i 's/SPEEDYBEEF405WING/SPEEDYBEEF405+RUNA/g' $(grep -rl "SPEEDYBEEF405WING" src || true)
+
+      - name: Install dependencies
+        run: |
+          cd inav
+          sudo apt update
+          sudo apt install -y make gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi python3
+
+      - name: Build firmware
+        run: |
+          cd inav
+          make SPEEDYBEEF405WING
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPEEDYBEEF405-RUNA
+          path: inav/obj/**/*
