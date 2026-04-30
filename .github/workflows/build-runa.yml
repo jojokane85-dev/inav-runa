@@ -21,8 +21,10 @@ jobs:
         run: |
           cd inav
          make SPEEDYBEEF405WING -j$(nproc)
+         
+        
 
-      - name: Patch built firmware
+     - name: Patch built firmware
         run: |
           python3 - <<'PY'
           from pathlib import Path
