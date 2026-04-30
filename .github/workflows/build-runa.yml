@@ -20,7 +20,7 @@ jobs:
       - name: Build firmware
         run: |
           cd inav
-          make SPEEDYBEEF405WINGV2 -j$(nproc)
+          make SPEEDYBEEF405WING -j$(nproc)
 
       - name: Patch built firmware
         run: |
