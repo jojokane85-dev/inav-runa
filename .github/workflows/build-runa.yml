@@ -11,25 +11,37 @@ jobs:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y git build-essential python3 python3-pip \
-          gcc-arm-none-eabi libnewlib-arm-none-eabi \
-          binutils-arm-none-eabi make
+          sudo apt install -y git build-essential python3 python3-pip gcc-arm-none-eabi libnewlib-arm-none-eabi binutils-arm-none-eabi make
 
       - name: Clone INAV
         run: |
           git clone --branch 8.0.1 https://github.com/iNavFlight/inav.git
 
-      - name: Patch name
-        run: |
-          cd inav
-          sed -i 's/SPEEDYBEEF405WINGV2/SPEEDYBEEF405+RUNA/g'
       - name: Build firmware
         run: |
           cd inav
-          make SPEEDYBEEF405WINGV2
+          make SPEEDYBEEF405WINGV2 -j$(nproc)
+
+      - name: Patch built firmware
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          files = list(Path("inav").rglob("*.bin")) + list(Path("inav").rglob("*.hex"))
+          old = b"SPEEDYBEEF405WING"
+          new = b"SPEEDYBEEF405+RUNA"
+
+          for f in files:
+              data = f.read_bytes()
+              if old in data:
+                  f.write_bytes(data.replace(old, new))
+                  print("patched", f)
+          PY
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FW
-          path: inav/obj/**/*
+          name: SPEEDYBEE-RUNA-FW
+          path: |
+            inav/obj/**/*.bin
+            inav/obj/**/*.hex
