@@ -11,7 +11,7 @@ jobs:
     - name: Install deps
       run: |
         sudo apt update
-        sudo apt install -y git build-essential gcc-arm-none-eabi make
+        sudo apt install -y git build-essential gcc-arm-none-eabi cmake ninja-build
 
     - name: Clone INAV
       run: |
@@ -22,15 +22,18 @@ jobs:
     - name: Build firmware
       run: |
         cd inav
-        make SPEEDYBEEF405 -j$(nproc)
+        mkdir build
+        cd build
+        cmake -DTARGET=SPEEDYBEEF405 ..
+        make -j$(nproc)
 
     - name: Rename firmware
       run: |
-        cd inav
-        cp obj/SPEEDYBEEF405/SPEEDYBEEF405.hex RUNA.hex
+        cd inav/build
+        cp *.hex RUNA.hex
 
     - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
         name: RUNA-Firmware
-        path: inav/RUNA.hex
+        path: inav/build/RUNA.hex
