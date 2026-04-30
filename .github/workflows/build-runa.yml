@@ -20,7 +20,8 @@ jobs:
             make \
             gcc-arm-none-eabi \
             binutils-arm-none-eabi \
-            libnewlib-arm-none-eabi
+            libnewlib-arm-none-eabi \
+            python3
 
       - name: Clone INAV
         run: |
@@ -38,40 +39,76 @@ jobs:
           cd inav/build
           make SPEEDYBEEF405WING -j$(nproc)
 
-      - name: Patch RUNA name and export firmware
+      - name: Find built firmware
+        run: |
+          echo "Built firmware files:"
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
+
+      - name: Patch HEX safely
         run: |
           python3 <<'PY'
           from pathlib import Path
-          import subprocess
 
           old = b"SPEEDYBEEF405WING"
-          new = b"SPEEDYBEF405+RUNA"  # same 17-byte length
+          new = b"SPEEDYBEF405+RUNA"  # same length: 17 bytes
 
-          build = Path("inav/build")
           out = Path("out")
           out.mkdir(exist_ok=True)
 
-          elf_files = sorted(build.rglob("*SPEEDYBEEF405WING*.elf"))
-          print("ELF files:", [str(f) for f in elf_files])
+          hex_files = list(Path("inav/build").rglob("*SPEEDYBEEF405WING*.hex"))
 
-          if not elf_files:
-              raise SystemExit("SPEEDYBEEF405WING ELF not found")
+          if not hex_files:
+              hex_files = list(Path("inav/build").rglob("*.hex"))
 
-          elf = elf_files[0]
-          data = elf.read_bytes()
+          if not hex_files:
+              raise SystemExit("No HEX files found")
 
-          if old not in data:
-              raise SystemExit("Target string not found in ELF")
+          src = hex_files[0]
+          print("Using HEX:", src)
 
-          patched_elf = out / "RUNA.elf"
-          patched_elf.write_bytes(data.replace(old, new))
+          def checksum(record_bytes):
+              return ((~sum(record_bytes) + 1) & 0xFF)
 
-          subprocess.check_call(["arm-none-eabi-objcopy", "-O", "ihex", str(patched_elf), str(out / "RUNA.hex")])
-          subprocess.check_call(["arm-none-eabi-objcopy", "-O", "binary", str(patched_elf), str(out / "RUNA.bin")])
+          patched_lines = []
+          patched = False
+
+          for line in src.read_text().splitlines():
+              if not line.startswith(":"):
+                  patched_lines.append(line)
+                  continue
+
+              count = int(line[1:3], 16)
+              addr = int(line[3:7], 16)
+              rectype = int(line[7:9], 16)
+              data_hex = line[9:9 + count * 2]
+              data = bytes.fromhex(data_hex)
+
+              if rectype == 0 and old in data:
+                  data = data.replace(old, new)
+                  patched = True
+
+                  rec = bytearray()
+                  rec.append(len(data))
+                  rec.append((addr >> 8) & 0xFF)
+                  rec.append(addr & 0xFF)
+                  rec.append(rectype)
+                  rec.extend(data)
+                  chk = checksum(rec)
+
+                  line = ":" + rec.hex().upper() + f"{chk:02X}"
+
+              patched_lines.append(line)
+
+          if not patched:
+              raise SystemExit("Target string not found inside HEX records")
+
+          dst = out / "RUNA.hex"
+          dst.write_text("\n".join(patched_lines) + "\n")
+          print("patched HEX written:", dst)
           PY
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: RUNA-Firmware
-          path: out/*
+          path: out/RUNA.hex
