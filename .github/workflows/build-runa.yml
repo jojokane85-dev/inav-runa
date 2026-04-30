@@ -12,7 +12,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y git build-essential python3 gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi make
+          sudo apt install -y git build-essential python3 cmake gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi
 
       - name: Clone INAV
         run: |
@@ -23,16 +23,17 @@ jobs:
       - name: Build firmware
         run: |
           cd inav
-          make SPEEDYBEEF405WING -j$(nproc)
+          mkdir build
+          cd build
+          cmake .. -DTARGET=SPEEDYBEEF405WING
+          make -j$(nproc)
 
       - name: Patch firmware name
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           old = b"SPEEDYBEEF405WING"
           new = b"SPEEDYBEEF405+RUNA"
-
           for f in list(Path("inav").rglob("*.bin")) + list(Path("inav").rglob("*.hex")):
               data = f.read_bytes()
               if old in data:
@@ -45,5 +46,5 @@ jobs:
         with:
           name: SPEEDYBEEF405-RUNA
           path: |
-            inav/obj/**/*.bin
-            inav/obj/**/*.hex
+            inav/**/*.bin
+            inav/**/*.hex
