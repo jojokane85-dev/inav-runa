@@ -11,38 +11,67 @@ jobs:
     steps:
       - name: Install deps
         run: |
-          sudo rm -rf /var/lib/apt/lists/*
-          sudo apt-get clean
           sudo apt-get update -y -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends \
             git \
             build-essential \
-            gcc-arm-none-eabi \
+            ruby \
             cmake \
-            ninja-build
+            make \
+            gcc-arm-none-eabi \
+            binutils-arm-none-eabi \
+            libnewlib-arm-none-eabi
 
       - name: Clone INAV
         run: |
-          git clone https://github.com/iNavFlight/inav.git
-          cd inav
-          git checkout 8.0.1
+          git clone --branch 8.0.1 --depth 1 https://github.com/iNavFlight/inav.git
 
-      - name: Build firmware
+      - name: Configure CMake
         run: |
           cd inav
           mkdir build
           cd build
-          cmake .. -DTARGET=SPEEDYBEEF405
-          make -j$(nproc)
+          cmake ..
 
-      - name: Rename firmware
+      - name: Build only SpeedyBee F405 Wing
         run: |
           cd inav/build
-          ls -la
-          cp *.hex RUNA.hex
+          make SPEEDYBEEF405WING -j$(nproc)
+
+      - name: Patch RUNA name and export firmware
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          old = b"SPEEDYBEEF405WING"
+          new = b"SPEEDYBEF405+RUNA"  # same 17-byte length
+
+          build = Path("inav/build")
+          out = Path("out")
+          out.mkdir(exist_ok=True)
+
+          elf_files = sorted(build.rglob("*SPEEDYBEEF405WING*.elf"))
+          print("ELF files:", [str(f) for f in elf_files])
+
+          if not elf_files:
+              raise SystemExit("SPEEDYBEEF405WING ELF not found")
+
+          elf = elf_files[0]
+          data = elf.read_bytes()
+
+          if old not in data:
+              raise SystemExit("Target string not found in ELF")
+
+          patched_elf = out / "RUNA.elf"
+          patched_elf.write_bytes(data.replace(old, new))
+
+          subprocess.check_call(["arm-none-eabi-objcopy", "-O", "ihex", str(patched_elf), str(out / "RUNA.hex")])
+          subprocess.check_call(["arm-none-eabi-objcopy", "-O", "binary", str(patched_elf), str(out / "RUNA.bin")])
+          PY
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: RUNA-Firmware
-          path: inav/build/RUNA.hex
+          path: out/*
