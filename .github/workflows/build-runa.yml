@@ -2,49 +2,35 @@ name: Build RUNA Firmware
 
 on:
   workflow_dispatch:
-  push:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Install deps
-        run: |
-          sudo apt update
-          sudo apt install -y git build-essential python3 cmake gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi
+    - name: Install deps
+      run: |
+        sudo apt update
+        sudo apt install -y git build-essential gcc-arm-none-eabi make
 
-      - name: Clone INAV
-        run: |
-          git clone https://github.com/iNavFlight/inav.git
-          cd inav
-          git checkout 8.0.1
+    - name: Clone INAV
+      run: |
+        git clone https://github.com/iNavFlight/inav.git
+        cd inav
+        git checkout 8.0.1
 
-      - name: Build firmware
-        run: |
-          cd inav
-          mkdir build
-          cd build
-          cmake .. -DTARGET=SPEEDYBEEF405WING
-          make -j$(nproc)
+    - name: Build firmware
+      run: |
+        cd inav
+        make SPEEDYBEEF405WING -j$(nproc)
 
-      - name: Patch firmware name
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          old = b"SPEEDYBEEF405WING"
-          new = b"SPEEDYBEEF405+RUNA"
-          for f in list(Path("inav").rglob("*.bin")) + list(Path("inav").rglob("*.hex")):
-              data = f.read_bytes()
-              if old in data:
-                  f.write_bytes(data.replace(old, new))
-                  print("patched", f)
-          PY
+    - name: Rename firmware
+      run: |
+        cd inav
+        cp obj/SPEEDYBEEF405WING/SPEEDYBEEF405WING.hex RUNA.hex
 
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: SPEEDYBEEF405-RUNA
-          path: |
-            inav/**/*.bin
-            inav/**/*.hex
+    - name: Upload firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: RUNA-Firmware
+        path: inav/RUNA.hex
