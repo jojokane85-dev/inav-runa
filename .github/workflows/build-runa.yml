@@ -22,12 +22,12 @@ jobs:
     - name: Build firmware
       run: |
         cd inav
-        make SPEEDYBEEF405WING -j$(nproc)
+        make SPEEDYBEEF405 -j$(nproc)
 
     - name: Rename firmware
       run: |
         cd inav
-        cp obj/SPEEDYBEEF405WING/SPEEDYBEEF405WING.hex RUNA.hex
+        cp obj/SPEEDYBEEF405/SPEEDYBEEF405.hex RUNA.hex
 
     - name: Upload firmware
       uses: actions/upload-artifact@v4
