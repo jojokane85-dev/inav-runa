@@ -50,13 +50,15 @@ jobs:
           from pathlib import Path
 
           old = b"SPEEDYBEEF405WING"
-          new = b"SPEEDYBEF405+RUNA"  # same length: 17 bytes
+          new = b"SPEEDBEEF405+RUNA"
+
+          if len(old) != len(new):
+              raise SystemExit(f"Length mismatch: old={len(old)} new={len(new)}")
 
           out = Path("out")
           out.mkdir(exist_ok=True)
 
           hex_files = list(Path("inav/build").rglob("*SPEEDYBEEF405WING*.hex"))
-
           if not hex_files:
               hex_files = list(Path("inav/build").rglob("*.hex"))
 
@@ -66,41 +68,81 @@ jobs:
           src = hex_files[0]
           print("Using HEX:", src)
 
+          records = []
+          memory = {}
+          base = 0
+
+          def parse_record(line):
+              count = int(line[1:3], 16)
+              addr = int(line[3:7], 16)
+              rectype = int(line[7:9], 16)
+              data = bytes.fromhex(line[9:9 + count * 2])
+              return count, addr, rectype, data
+
+          for line in src.read_text().splitlines():
+              if not line.startswith(":"):
+                  records.append((line, None))
+                  continue
+
+              count, addr, rectype, data = parse_record(line)
+              records.append((line, (count, addr, rectype, data, base)))
+
+              if rectype == 0:
+                  absolute = base + addr
+                  for i, b in enumerate(data):
+                      memory[absolute + i] = b
+              elif rectype == 4:
+                  base = int.from_bytes(data, "big") << 16
+              elif rectype == 2:
+                  base = int.from_bytes(data, "big") << 4
+
+          if not memory:
+              raise SystemExit("No data records found")
+
+          min_addr = min(memory)
+          max_addr = max(memory)
+          image = bytearray([0xFF] * (max_addr - min_addr + 1))
+
+          for addr, b in memory.items():
+              image[addr - min_addr] = b
+
+          pos = image.find(old)
+          if pos < 0:
+              raise SystemExit("Target string not found in complete HEX memory image")
+
+          abs_pos = min_addr + pos
+          print("Patch address:", hex(abs_pos))
+
+          for i, b in enumerate(new):
+              memory[abs_pos + i] = b
+
           def checksum(record_bytes):
               return ((~sum(record_bytes) + 1) & 0xFF)
 
           patched_lines = []
-          patched = False
 
-          for line in src.read_text().splitlines():
-              if not line.startswith(":"):
+          for line, info in records:
+              if info is None:
                   patched_lines.append(line)
                   continue
 
-              count = int(line[1:3], 16)
-              addr = int(line[3:7], 16)
-              rectype = int(line[7:9], 16)
-              data_hex = line[9:9 + count * 2]
-              data = bytes.fromhex(data_hex)
+              count, addr, rectype, data, rec_base = info
 
-              if rectype == 0 and old in data:
-                  data = data.replace(old, new)
-                  patched = True
+              if rectype == 0:
+                  absolute = rec_base + addr
+                  new_data = bytes(memory[absolute + i] for i in range(count))
 
                   rec = bytearray()
-                  rec.append(len(data))
+                  rec.append(count)
                   rec.append((addr >> 8) & 0xFF)
                   rec.append(addr & 0xFF)
                   rec.append(rectype)
-                  rec.extend(data)
+                  rec.extend(new_data)
                   chk = checksum(rec)
 
-                  line = ":" + rec.hex().upper() + f"{chk:02X}"
-
-              patched_lines.append(line)
-
-          if not patched:
-              raise SystemExit("Target string not found inside HEX records")
+                  patched_lines.append(":" + rec.hex().upper() + f"{chk:02X}")
+              else:
+                  patched_lines.append(line)
 
           dst = out / "RUNA.hex"
           dst.write_text("\n".join(patched_lines) + "\n")
