@@ -22,7 +22,7 @@ jobs:
       - name: build
         run: |
           cd inav
-          make MATEKF405-WING
+          make MATEKF405WING
 
       - name: upload
         uses: actions/upload-artifact@v4
