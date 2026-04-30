@@ -2,38 +2,47 @@ name: Build RUNA Firmware
 
 on:
   workflow_dispatch:
+  push:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
-    - name: Install deps
-      run: |
-        sudo apt update
-        sudo apt install -y git build-essential gcc-arm-none-eabi cmake ninja-build
+      - name: Install deps
+        run: |
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get clean
+          sudo apt-get update -y -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends \
+            git \
+            build-essential \
+            gcc-arm-none-eabi \
+            cmake \
+            ninja-build
 
-    - name: Clone INAV
-      run: |
-        git clone https://github.com/iNavFlight/inav.git
-        cd inav
-        git checkout 8.0.1
+      - name: Clone INAV
+        run: |
+          git clone https://github.com/iNavFlight/inav.git
+          cd inav
+          git checkout 8.0.1
 
-    - name: Build firmware
-      run: |
-        cd inav
-        mkdir build
-        cd build
-        cmake -DTARGET=SPEEDYBEEF405 ..
-        make -j$(nproc)
+      - name: Build firmware
+        run: |
+          cd inav
+          mkdir build
+          cd build
+          cmake .. -DTARGET=SPEEDYBEEF405
+          make -j$(nproc)
 
-    - name: Rename firmware
-      run: |
-        cd inav/build
-        cp *.hex RUNA.hex
+      - name: Rename firmware
+        run: |
+          cd inav/build
+          ls -la
+          cp *.hex RUNA.hex
 
-    - name: Upload firmware
-      uses: actions/upload-artifact@v4
-      with:
-        name: RUNA-Firmware
-        path: inav/build/RUNA.hex
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: RUNA-Firmware
+          path: inav/build/RUNA.hex
