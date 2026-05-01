@@ -1,4 +1,4 @@
-name: Build RUNA Firmware
+name: Build CADDXF405 RUNA Firmware
 
 on:
   workflow_dispatch:
@@ -34,31 +34,34 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build only SpeedyBee F405 Wing
+      - name: Build CADDXF405 4.5 Wing
         run: |
           cd inav/build
-          make SPEEDYBEEF405WING -j$(nproc)
+          make CADDXF405_45_WING -j$(nproc)
 
       - name: Find built firmware
         run: |
           echo "Built firmware files:"
           find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
 
-      - name: Patch HEX safely
+      - name: Patch RUNA name in HEX
         run: |
           python3 <<'PY'
           from pathlib import Path
 
-          old = b"SPEEDYBEEF405WING"
-          new = b"SPEEDBEEF405+RUNA"
+          replacements = [
+              (b"CADDXF405_45_WING", b"CADDXF405+RUNA_45"),
+              (b"CADDXF405_WING", b"CADDXF405+RUNA"),
+          ]
 
-          if len(old) != len(new):
-              raise SystemExit(f"Length mismatch: old={len(old)} new={len(new)}")
+          for old, new in replacements:
+              if len(old) != len(new):
+                  raise SystemExit(f"Length mismatch: {old}={len(old)} {new}={len(new)}")
 
           out = Path("out")
           out.mkdir(exist_ok=True)
 
-          hex_files = list(Path("inav/build").rglob("*SPEEDYBEEF405WING*.hex"))
+          hex_files = list(Path("inav/build").rglob("*CADDXF405_45_WING*.hex"))
           if not hex_files:
               hex_files = list(Path("inav/build").rglob("*.hex"))
 
@@ -106,15 +109,21 @@ jobs:
           for addr, b in memory.items():
               image[addr - min_addr] = b
 
-          pos = image.find(old)
-          if pos < 0:
-              raise SystemExit("Target string not found in complete HEX memory image")
+          patched_any = False
 
-          abs_pos = min_addr + pos
-          print("Patch address:", hex(abs_pos))
+          for old, new in replacements:
+              pos = image.find(old)
+              if pos >= 0:
+                  abs_pos = min_addr + pos
+                  print(f"Patching {old.decode()} -> {new.decode()} at {hex(abs_pos)}")
+                  for i, b in enumerate(new):
+                      memory[abs_pos + i] = b
+                  patched_any = True
+              else:
+                  print(f"Not found: {old.decode()}")
 
-          for i, b in enumerate(new):
-              memory[abs_pos + i] = b
+          if not patched_any:
+              raise SystemExit("No CADDXF405 target string found in HEX")
 
           def checksum(record_bytes):
               return ((~sum(record_bytes) + 1) & 0xFF)
@@ -144,7 +153,7 @@ jobs:
               else:
                   patched_lines.append(line)
 
-          dst = out / "RUNA.hex"
+          dst = out / "CADDXF405_RUNA.hex"
           dst.write_text("\n".join(patched_lines) + "\n")
           print("patched HEX written:", dst)
           PY
@@ -152,5 +161,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-Firmware
-          path: out/RUNA.hex
+          name: CADDXF405-RUNA-Firmware
+          path: out/CADDXF405_RUNA.hex
