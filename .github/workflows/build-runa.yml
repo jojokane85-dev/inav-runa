@@ -1,4 +1,4 @@
-name: Build RUNA FC 4.1 Simple
+name: Build RUNA FC 4.1 Simple Exact
 
 on:
   workflow_dispatch:
@@ -10,6 +10,7 @@ jobs:
 
     env:
       TARGET: SPEEDYBEEF405WING
+      INAV_COMMIT: 62f1028d
 
     steps:
       - name: Install deps
@@ -30,9 +31,13 @@ jobs:
             python3 \
             python3-pip
 
-      - name: Clone INAV
+      - name: Clone INAV exact FC 4.1 base
         run: |
-          git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
+          git clone https://github.com/iNavFlight/inav.git
+          cd inav
+          git checkout ${INAV_COMMIT}
+          echo "INAV commit:"
+          git rev-parse HEAD
 
       - name: Patch RUNA name in Configurator
         run: |
@@ -99,6 +104,7 @@ jobs:
               new_text, count = re.subn(pattern, replacement, text, count=1, flags=flags)
               if count != 1:
                   print(f"ERROR: could not replace: {name}")
+                  print("PATTERN:", pattern)
                   raise SystemExit(1)
               return new_text
 
@@ -163,7 +169,97 @@ jobs:
           )
 
           path.write_text(text, encoding="utf-8")
-          print("Patched RUNA 3.3GHz VTX table")
+          print("Patched vtx_string.c")
+
+          path = Path("src/main/io/vtx_string.h")
+          text = path.read_text(encoding="utf-8")
+
+          text = sub_required(
+              text,
+              r"extern\s+const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*\d+\s*\]\s*\[\s*8\s*\]\s*;",
+              "extern const uint16_t vtx1G3frequencyTable[6][8];",
+              "vtx1G3frequencyTable extern"
+          )
+
+          text = text.replace(
+              "extern const char vtx51G3BandLetter[];",
+              "extern const char vtx1G3BandLetter[];"
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("Patched vtx_string.h")
+
+          path = Path("src/main/io/vtx_tramp.h")
+          text = path.read_text(encoding="utf-8")
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_TRAMP_1G3_BAND_COUNT\s+\d+",
+              "#define VTX_TRAMP_1G3_BAND_COUNT 6",
+              "VTX_TRAMP_1G3_BAND_COUNT"
+          )
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_TRAMP_1G3_MAX_POWER_COUNT\s+\d+",
+              "#define VTX_TRAMP_1G3_MAX_POWER_COUNT 5",
+              "VTX_TRAMP_1G3_MAX_POWER_COUNT"
+          )
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ\s+\d+",
+              "#define VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ 3000",
+              "VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ"
+          )
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ\s+\d+",
+              "#define VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ 3599",
+              "VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ"
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("Patched vtx_tramp.h")
+
+          path = Path("src/main/io/vtx_tramp.c")
+          text = path.read_text(encoding="utf-8")
+
+          text = sub_required(
+              text,
+              r"const\s+uint16_t\s+trampPowerTable_1G3_800\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\]\s*=\s*\{.*?\};",
+              "const uint16_t trampPowerTable_1G3_800[VTX_TRAMP_1G3_MAX_POWER_COUNT] = { 25, 200, 400, 800, 800 };",
+              "trampPowerTable_1G3_800",
+              flags=re.S
+          )
+
+          text = sub_required(
+              text,
+              r"const\s+char\s*\*\s+const\s+trampPowerNames_1G3_800\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              'const char * const trampPowerNames_1G3_800[VTX_TRAMP_1G3_MAX_POWER_COUNT + 1] = { "---", "25 ", "200", "400", "800", "800" };',
+              "trampPowerNames_1G3_800",
+              flags=re.S
+          )
+
+          text = sub_required(
+              text,
+              r"const\s+uint16_t\s+trampPowerTable_1G3_2000\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\]\s*=\s*\{.*?\};",
+              "const uint16_t trampPowerTable_1G3_2000[VTX_TRAMP_1G3_MAX_POWER_COUNT] = { 25, 200, 400, 800, 2000 };",
+              "trampPowerTable_1G3_2000",
+              flags=re.S
+          )
+
+          text = sub_required(
+              text,
+              r"const\s+char\s*\*\s+const\s+trampPowerNames_1G3_2000\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              'const char * const trampPowerNames_1G3_2000[VTX_TRAMP_1G3_MAX_POWER_COUNT + 1] = { "---", "25 ", "200", "400", "800", "2000" };',
+              "trampPowerNames_1G3_2000",
+              flags=re.S
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("Patched vtx_tramp.c")
           PY
 
       - name: Patch RUNA OSD shutter
@@ -272,7 +368,7 @@ jobs:
         run: |
           cd inav/build
           make clean_${TARGET} || true
-          make ${TARGET} -j2
+          make ${TARGET} -j2 VERBOSE=1
 
       - name: Find firmware
         if: always()
@@ -291,6 +387,7 @@ jobs:
           import os
 
           target = os.environ["TARGET"]
+          commit = os.environ["INAV_COMMIT"]
           build_dir = Path("inav/build")
           out_dir = Path("out") / target
           out_dir.mkdir(parents=True, exist_ok=True)
@@ -305,7 +402,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_FC41_SIMPLE_3G3_SHUTTER_{file.name}"
+              new_name = f"RUNA_FC41_SIMPLE_EXACT_{commit}_3G3_SHUTTER_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
@@ -322,5 +419,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC41-SIMPLE-3G3-SHUTTER
+          name: RUNA-FC41-SIMPLE-EXACT-62f1028d-3G3-SHUTTER
           path: out/${{ env.TARGET }}/*
