@@ -94,7 +94,6 @@ jobs:
           cd inav
           python3 <<'PY'
           from pathlib import Path
-          import re
 
           path = Path("src/main/io/osd.c")
           text = path.read_text(encoding="utf-8")
@@ -198,24 +197,7 @@ jobs:
               if not m:
                   continue
 
-              name = m.group(1).strip()
-              value = m.group(2).strip()
-              values[name] = value
-
-          def is_number(value: str) -> bool:
-              try:
-                  float(value)
-                  return True
-              except ValueError:
-                  return False
-
-          def yaml_value(value: str) -> str:
-              # В settings.yaml enum/table значения должны быть строками.
-              # Числа оставляем числами.
-              if is_number(value):
-                  return value
-              escaped = value.replace('"', '\\"')
-              return f'"{escaped}"'
+              values[m.group(1).strip()] = m.group(2).strip()
 
           def patch_default(text, name, value):
               pattern = (
@@ -223,9 +205,22 @@ jobs:
                   r"\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
               )
 
+              def repl(m):
+                  old_value = m.group(2).strip()
+
+                  # Если старый default_value был в кавычках — это table/enum.
+                  # Оставляем новое значение в кавычках.
+                  if old_value.startswith('"') or old_value.startswith("'"):
+                      escaped = value.replace('"', '\\"')
+                      return m.group(1) + '"' + escaped + '"'
+
+                  # Если старый default_value был без кавычек — это bool/number/symbol.
+                  # Оставляем без кавычек.
+                  return m.group(1) + value
+
               new_text, count = re.subn(
                   pattern,
-                  lambda m: m.group(1) + yaml_value(value),
+                  repl,
                   text,
                   count=1,
                   flags=re.S
@@ -240,7 +235,7 @@ jobs:
               text, count = patch_default(text, name, value)
 
               if count == 1:
-                  print(f"RUNA default patched: {name} = {yaml_value(value)}")
+                  print(f"RUNA default patched: {name} = {value}")
                   patched += 1
               else:
                   print(f"WARNING: setting not found: {name}")
@@ -258,6 +253,15 @@ jobs:
               print("Missing settings:")
               for name in missing:
                   print(" -", name)
+
+          print("Important patched examples:")
+          for name in ["rc_filter_auto", "airmode_type", "nav_extra_arming_safety", "nav_rth_allow_landing"]:
+              print("----", name)
+              lines = text.splitlines()
+              for i, line in enumerate(lines):
+                  if f"name: {name}" in line:
+                      print("\\n".join(lines[i:i+8]))
+                      break
           PY
 
       - name: Patch RUNA OSD layout and CH8 switch defaults
