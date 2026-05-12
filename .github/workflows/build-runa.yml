@@ -66,23 +66,24 @@ jobs:
           cd inav
           python3 <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("src/main/io/osd.c")
           text = path.read_text(encoding="utf-8")
 
-          replacements = {
-              'char *p = "ACRO";': 'char *p = "Acro ";',
-              'p = " AH ";': 'p = "AH   ";',
-              'p = "ANGL";': 'p = "angle";',
-              'p = "ANGH";': 'p = "AH   ";',
-          }
+          replacements = [
+              (r'char\s+\*p\s*=\s*"ACRO";', 'char *p = "Acro ";', "ACRO -> Acro"),
+              (r'p\s*=\s*"\sAH\s";', 'p = "AH   ";', "AH -> AH"),
+              (r'p\s*=\s*"ANGL";', 'p = "angle";', "ANGL -> angle"),
+              (r'p\s*=\s*"ANGH";', 'p = "AH   ";', "ANGH -> AH"),
+          ]
 
-          for old, new in replacements.items():
-              if old not in text:
-                  print(f"ERROR: not found: {old}")
+          for pattern, replacement, label in replacements:
+              text, count = re.subn(pattern, replacement, text, count=1)
+              if count != 1:
+                  print(f"ERROR: could not patch flight mode: {label}")
                   raise SystemExit(1)
-              text = text.replace(old, new, 1)
-              print(f"Patched: {old} -> {new}")
+              print(f"Patched flight mode: {label}")
 
           path.write_text(text, encoding="utf-8")
           print("Patched RUNA OSD flight mode names: Acro / angle / AH")
@@ -98,18 +99,22 @@ jobs:
           path = Path("src/main/io/osd.c")
           text = path.read_text(encoding="utf-8")
 
-          pattern = r'tfp_sprintf\(string_buffer,\s*"INAV VERSION: %s",\s*FC_VERSION_STRING\);\s*uint8_t xPos = \(osdDisplayPort->cols - 19\) / 2;'
+          old_line = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
+          new_line = 'tfp_sprintf(string_buffer, "version RUNA 1.0");'
 
-          replacement = '''tfp_sprintf(string_buffer, "version RUNA 1.0");
-              uint8_t xPos = OSD_CENTER_S(string_buffer);'''
-
-          new_text, count = re.subn(pattern, replacement, text, count=1)
-
-          if count != 1:
-              print("ERROR: could not patch startup screen version text")
+          if old_line not in text:
+              print("ERROR: startup version sprintf line not found")
               raise SystemExit(1)
 
-          path.write_text(new_text, encoding="utf-8")
+          text = text.replace(old_line, new_line, 1)
+
+          text = text.replace(
+              'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
+              'uint8_t xPos = OSD_CENTER_S(string_buffer);',
+              1
+          )
+
+          path.write_text(text, encoding="utf-8")
           print("Patched startup screen: version RUNA 1.0")
           PY
 
@@ -197,6 +202,21 @@ jobs:
               value = m.group(2).strip()
               values[name] = value
 
+          def is_number(value: str) -> bool:
+              try:
+                  float(value)
+                  return True
+              except ValueError:
+                  return False
+
+          def yaml_value(value: str) -> str:
+              # В settings.yaml enum/table значения должны быть строками.
+              # Числа оставляем числами.
+              if is_number(value):
+                  return value
+              escaped = value.replace('"', '\\"')
+              return f'"{escaped}"'
+
           def patch_default(text, name, value):
               pattern = (
                   r"(-\s+name:\s*" + re.escape(name) +
@@ -205,7 +225,7 @@ jobs:
 
               new_text, count = re.subn(
                   pattern,
-                  lambda m: m.group(1) + value,
+                  lambda m: m.group(1) + yaml_value(value),
                   text,
                   count=1,
                   flags=re.S
@@ -220,7 +240,7 @@ jobs:
               text, count = patch_default(text, name, value)
 
               if count == 1:
-                  print(f"RUNA default patched: {name} = {value}")
+                  print(f"RUNA default patched: {name} = {yaml_value(value)}")
                   patched += 1
               else:
                   print(f"WARNING: setting not found: {name}")
@@ -290,23 +310,13 @@ jobs:
 
           void targetConfiguration(void)
           {
-              // =========================
-              // RUNA OSD DEFAULTS
-              // Layout 0 = обычный OSD
-              // Layout 1 = OSD + предупреждение о взводе
-              // Layout 2 = RUNA шторка
-              // =========================
-
               for (uint8_t layout = 0; layout < OSD_LAYOUT_COUNT; layout++) {
                   for (uint16_t item = 0; item < OSD_ITEM_COUNT; item++) {
                       osdLayoutsConfigMutable()->item_pos[layout][item] = 0;
                   }
               }
 
-              // =========================
               // LAYOUT 0 = обычный OSD
-              // =========================
-
               runaSetOsdItem(0, 0,   22, 2,  true);
               runaSetOsdItem(0, 1,   2,  13, true);
               runaSetOsdItem(0, 2,   0,  0,  true);
@@ -322,10 +332,7 @@ jobs:
               runaSetOsdItem(0, 30,  1,  14, true);
               runaSetOsdItem(0, 110, 22, 3,  true);
 
-              // =========================
               // LAYOUT 1 = OSD + предупреждение о взводе
-              // =========================
-
               runaSetOsdItem(1, 0,   22, 2,  true);
               runaSetOsdItem(1, 1,   2,  13, true);
               runaSetOsdItem(1, 2,   0,  0,  true);
@@ -341,15 +348,9 @@ jobs:
               runaSetOsdItem(1, 25,  23, 5,  true);
               runaSetOsdItem(1, 30,  1,  14, true);
               runaSetOsdItem(1, 110, 22, 3,  true);
-
-              // Предупреждение / arming warning
               runaSetOsdItem(1, 142, 12, 3,  true);
 
-              // =========================
-              // CH8 OSD SWITCHING
-              // logic 20-25
-              // =========================
-
+              // Очистка logic 20-25
               for (uint8_t i = 20; i <= 25; i++) {
                   runaSetLogic(i, 0, -1, 0, 0, 0, 0, 0, 0);
               }
@@ -370,7 +371,7 @@ jobs:
 
           text = text + patch
           path.write_text(text, encoding="utf-8")
-          print("Patched RUNA OSD layout defaults and CH8 switching into SPEEDYBEEF405WING targetConfiguration")
+          print("Patched RUNA OSD layout defaults and CH8 switching")
           PY
 
       - name: Patch RUNA 3.3GHz VTX table
@@ -387,11 +388,6 @@ jobs:
                   print("PATTERN:", pattern)
                   raise SystemExit(1)
               return new_text
-
-          # =========================
-          # vtx_string.c
-          # FREQUENCYGROUP_1G3 -> RUNA 3.3GHz table
-          # =========================
 
           path = Path("src/main/io/vtx_string.c")
           text = path.read_text(encoding="utf-8")
@@ -414,12 +410,12 @@ jobs:
               text,
               r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
               """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
-              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 }, // RUNA 3.3 BAND_A
-              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 }, // RUNA 3.3 BAND_B
-              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 }, // RUNA 3.3 BAND_C
-              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 }, // RUNA 3.3 BAND_D
-              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 }, // RUNA 3.3 BAND_E
-              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 }, // RUNA 3.3 BAND_F
+              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
+              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
+              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
+              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
+              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
+              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
           };""",
               "vtx1G3frequencyTable",
               flags=re.S
@@ -454,11 +450,7 @@ jobs:
           )
 
           path.write_text(text, encoding="utf-8")
-          print("Patched vtx_string.c: FREQUENCYGROUP_1G3 is now RUNA 3.3GHz")
-
-          # =========================
-          # vtx_string.h
-          # =========================
+          print("Patched vtx_string.c")
 
           path = Path("src/main/io/vtx_string.h")
           text = path.read_text(encoding="utf-8")
@@ -477,11 +469,6 @@ jobs:
 
           path.write_text(text, encoding="utf-8")
           print("Patched vtx_string.h")
-
-          # =========================
-          # vtx_tramp.h
-          # 1G3 limits -> RUNA 3.3GHz
-          # =========================
 
           path = Path("src/main/io/vtx_tramp.h")
           text = path.read_text(encoding="utf-8")
@@ -516,11 +503,6 @@ jobs:
 
           path.write_text(text, encoding="utf-8")
           print("Patched vtx_tramp.h")
-
-          # =========================
-          # vtx_tramp.c
-          # RUNA 3.3 power table
-          # =========================
 
           path = Path("src/main/io/vtx_tramp.c")
           text = path.read_text(encoding="utf-8")
@@ -653,7 +635,7 @@ jobs:
               raise SystemExit(1)
 
           path.write_text(new_text, encoding="utf-8")
-          print("Patched RUNA OSD shutter: Layout 2 = shutter with center window")
+          print("Patched RUNA OSD shutter")
           PY
 
       - name: Configure CMake
