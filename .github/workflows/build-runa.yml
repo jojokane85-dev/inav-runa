@@ -207,12 +207,10 @@ jobs:
               def repl(m):
                   old_value = m.group(2).strip()
 
-                  # Если старый default_value был в кавычках — это enum/table.
                   if old_value.startswith('"') or old_value.startswith("'"):
                       escaped = value.replace('"', '\\"')
                       return m.group(1) + '"' + escaped + '"'
 
-                  # Если старый default_value был без кавычек — bool/number.
                   return m.group(1) + value
 
               new_text, count = re.subn(
@@ -250,120 +248,6 @@ jobs:
               print("Missing settings:")
               for name in missing:
                   print(" -", name)
-          PY
-
-      - name: Patch RUNA OSD layout and CH8 switch defaults
-        run: |
-          cd inav
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/main/target/SPEEDYBEEF405WING/target.c")
-          text = path.read_text(encoding="utf-8")
-
-          if "void targetConfiguration(void)" in text:
-              print("ERROR: targetConfiguration already exists in target.c")
-              raise SystemExit(1)
-
-          patch = r'''
-
-          #include <stdbool.h>
-          #include <stdint.h>
-          #include "io/osd.h"
-          #include "programming/logic_condition.h"
-
-          static void runaSetOsdItem(uint8_t layout, uint16_t item, uint8_t x, uint8_t y, bool visible)
-          {
-              uint16_t pos = OSD_POS(x, y);
-
-              if (visible) {
-                  pos |= OSD_VISIBLE_FLAG;
-              }
-
-              osdLayoutsConfigMutable()->item_pos[layout][item] = pos;
-          }
-
-          static void runaSetLogic(uint8_t index, uint8_t enabled, int8_t activatorId, uint8_t operation,
-                                   uint8_t operandAType, int32_t operandAValue,
-                                   uint8_t operandBType, int32_t operandBValue,
-                                   uint8_t flags)
-          {
-              logicCondition_t *lc = logicConditionsMutable(index);
-
-              lc->enabled = enabled;
-              lc->activatorId = activatorId;
-              lc->operation = operation;
-              lc->operandA.type = operandAType;
-              lc->operandA.value = operandAValue;
-              lc->operandB.type = operandBType;
-              lc->operandB.value = operandBValue;
-              lc->flags = flags;
-          }
-
-          void targetConfiguration(void)
-          {
-              for (uint8_t layout = 0; layout < OSD_LAYOUT_COUNT; layout++) {
-                  for (uint16_t item = 0; item < OSD_ITEM_COUNT; item++) {
-                      osdLayoutsConfigMutable()->item_pos[layout][item] = 0;
-                  }
-              }
-
-              // LAYOUT 0 = обычный OSD
-              runaSetOsdItem(0, 0,   22, 2,  true);
-              runaSetOsdItem(0, 1,   2,  13, true);
-              runaSetOsdItem(0, 2,   0,  0,  true);
-              runaSetOsdItem(0, 3,   8,  6,  true);
-              runaSetOsdItem(0, 9,   1,  3,  true);
-              runaSetOsdItem(0, 11,  5,  11, true);
-              runaSetOsdItem(0, 12,  23, 13, true);
-              runaSetOsdItem(0, 13,  13, 5,  true);
-              runaSetOsdItem(0, 14,  13, 3,  true);
-              runaSetOsdItem(0, 15,  4,  8,  true);
-              runaSetOsdItem(0, 24,  13, 2,  true);
-              runaSetOsdItem(0, 25,  23, 5,  true);
-              runaSetOsdItem(0, 30,  1,  14, true);
-              runaSetOsdItem(0, 110, 22, 3,  true);
-
-              // LAYOUT 1 = OSD + предупреждение
-              runaSetOsdItem(1, 0,   22, 2,  true);
-              runaSetOsdItem(1, 1,   2,  13, true);
-              runaSetOsdItem(1, 2,   0,  0,  true);
-              runaSetOsdItem(1, 3,   8,  6,  true);
-              runaSetOsdItem(1, 7,   13, 12, true);
-              runaSetOsdItem(1, 9,   1,  3,  true);
-              runaSetOsdItem(1, 11,  5,  11, true);
-              runaSetOsdItem(1, 12,  23, 13, true);
-              runaSetOsdItem(1, 13,  13, 5,  true);
-              runaSetOsdItem(1, 14,  13, 3,  true);
-              runaSetOsdItem(1, 15,  4,  8,  true);
-              runaSetOsdItem(1, 24,  13, 2,  true);
-              runaSetOsdItem(1, 25,  23, 5,  true);
-              runaSetOsdItem(1, 30,  1,  14, true);
-              runaSetOsdItem(1, 110, 22, 3,  true);
-              runaSetOsdItem(1, 142, 12, 3,  true);
-
-              // Очистка logic 20-25
-              for (uint8_t i = 20; i <= 25; i++) {
-                  runaSetLogic(i, 0, -1, 0, 0, 0, 0, 0, 0);
-              }
-
-              // CH8 LOW -> Layout 0
-              runaSetLogic(20, 1, -1, 4, 1, 8, 0, 0, 0);
-              runaSetLogic(21, 1, 20, 32, 0, 0, 0, 0, 0);
-
-              // CH8 MID -> Layout 2 / RUNA shutter
-              runaSetLogic(22, 1, -1, 5, 1, 8, 0, 0, 0);
-              runaSetLogic(23, 1, 22, 32, 0, 2, 0, 0, 0);
-
-              // CH8 HIGH -> Layout 1 / OSD + warning
-              runaSetLogic(24, 1, -1, 6, 1, 8, 0, 0, 0);
-              runaSetLogic(25, 1, 24, 32, 0, 1, 0, 0, 0);
-          }
-          '''
-
-          text = text + patch
-          path.write_text(text, encoding="utf-8")
-          print("Patched RUNA OSD layout defaults and CH8 switching")
           PY
 
       - name: Patch RUNA 3.3GHz VTX table
@@ -686,7 +570,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_SPEEDYBEE_1_0_3G3_SHUTTER_ADV_OSD_{file.name}"
+              new_name = f"RUNA_SPEEDYBEE_1_0_3G3_SHUTTER_ADV_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
@@ -706,5 +590,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-SPEEDYBEEF405WING-1-0-3G3-SHUTTER-ADV-OSD
+          name: RUNA-SPEEDYBEEF405WING-1-0-3G3-SHUTTER-ADV
           path: out/${{ env.TARGET }}/*
