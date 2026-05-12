@@ -1,4 +1,4 @@
-name: Build CADDXF4 RUNA Firmware
+name: Build RUNA SPEEDYBEEF405WING
 
 on:
   workflow_dispatch:
@@ -8,6 +8,9 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    env:
+      TARGET: SPEEDYBEEF405WING
+
     steps:
       - name: Install deps
         run: |
@@ -15,142 +18,719 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             git \
             build-essential \
+            g++ \
             ruby \
             cmake \
             make \
             gcc-arm-none-eabi \
             binutils-arm-none-eabi \
             libnewlib-arm-none-eabi \
-            python3
+            libstdc++-arm-none-eabi-dev \
+            libstdc++-arm-none-eabi-newlib \
+            ninja-build \
+            python3 \
+            python3-pip
 
       - name: Clone INAV
         run: |
-          git clone --branch 8.0.1 --depth 1 https://github.com/iNavFlight/inav.git
+          git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
+
+      - name: Patch RUNA name in Configurator
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/fc/fc_msp.c")
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
+
+          replacement = '''sbufWriteU8(dst, strlen(targetName) + 5);
+                  sbufWriteData(dst, targetName, strlen(targetName));
+                  sbufWriteData(dst, "+RUNA", 5);'''
+
+          new_text, count = re.subn(pattern, replacement, text, count=1)
+
+          if count != 1:
+              print("ERROR: Could not patch MSP_BOARD_INFO targetName block")
+              raise SystemExit(1)
+
+          path.write_text(new_text, encoding="utf-8")
+          print("Patched targetName -> targetName+RUNA")
+          PY
+
+      - name: Patch RUNA OSD flight mode names
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/io/osd.c")
+          text = path.read_text(encoding="utf-8")
+
+          replacements = {
+              'char *p = "ACRO";': 'char *p = "Acro ";',
+              'p = " AH ";': 'p = "AH   ";',
+              'p = "ANGL";': 'p = "angle";',
+              'p = "ANGH";': 'p = "AH   ";',
+          }
+
+          for old, new in replacements.items():
+              if old not in text:
+                  print(f"ERROR: not found: {old}")
+                  raise SystemExit(1)
+              text = text.replace(old, new, 1)
+              print(f"Patched: {old} -> {new}")
+
+          path.write_text(text, encoding="utf-8")
+          print("Patched RUNA OSD flight mode names: Acro / angle / AH")
+          PY
+
+      - name: Patch RUNA startup screen text
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/osd.c")
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'tfp_sprintf\(string_buffer,\s*"INAV VERSION: %s",\s*FC_VERSION_STRING\);\s*uint8_t xPos = \(osdDisplayPort->cols - 19\) / 2;'
+
+          replacement = '''tfp_sprintf(string_buffer, "version RUNA 1.0");
+              uint8_t xPos = OSD_CENTER_S(string_buffer);'''
+
+          new_text, count = re.subn(pattern, replacement, text, count=1)
+
+          if count != 1:
+              print("ERROR: could not patch startup screen version text")
+              raise SystemExit(1)
+
+          path.write_text(new_text, encoding="utf-8")
+          print("Patched startup screen: version RUNA 1.0")
+          PY
+
+      - name: Patch RUNA Advanced Tuning defaults
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/fc/settings.yaml")
+          text = path.read_text(encoding="utf-8")
+
+          runa_cli_values = r"""
+          set rc_filter_auto = OFF
+          set deadband = 32
+          set airmode_type = STICK_CENTER_ONCE
+          set inav_w_z_baro_p = 0.350
+
+          set nav_extra_arming_safety = ON
+          set nav_wp_radius = 5000
+          set nav_wp_max_safe_distance = 500
+          set nav_rth_allow_landing = FS_ONLY
+          set nav_rth_altitude = 5000
+          set nav_fw_climb_angle = 12
+          set nav_fw_control_smoothness = 2
+
+          set nav_fw_launch_motor_delay = 1
+          set nav_fw_launch_spinup_time = 250
+          set nav_fw_launch_end_time = 5000
+          set nav_fw_launch_timeout = 50000
+          set nav_fw_launch_max_altitude = 5000
+          set nav_fw_launch_climb_angle = 15
+
+          set fw_p_pitch = 15
+          set fw_i_pitch = 5
+          set fw_d_pitch = 5
+          set fw_ff_pitch = 80
+
+          set fw_p_roll = 15
+          set fw_i_roll = 3
+
+          set max_angle_inclination_rll = 450
+          set dterm_lpf_hz = 10
+
+          set fw_turn_assist_yaw_gain = 2.000
+          set fw_turn_assist_pitch_gain = 0.600
+
+          set nav_fw_pos_z_p = 25
+          set nav_fw_pos_z_d = 8
+          set nav_fw_pos_xy_p = 55
+
+          set d_boost_min = 1.000
+          set d_boost_max = 1.000
+
+          set rc_expo = 30
+          set rc_yaw_expo = 30
+
+          set roll_rate = 18
+          set pitch_rate = 9
+          set yaw_rate = 3
+
+          set throttle_idle = 5.000
+          set nav_mc_hover_thr = 1600
+          set nav_fw_cruise_thr = 1650
+          set nav_fw_min_thr = 1550
+          set nav_fw_max_thr = 1800
+          set nav_fw_pitch2thr = 6
+          set nav_fw_launch_thr = 2000
+          set nav_fw_launch_idle_thr = 1750
+          """
+
+          values = {}
+
+          for line in runa_cli_values.splitlines():
+              line = line.strip()
+              if not line or line.startswith("#"):
+                  continue
+
+              m = re.match(r"set\s+([a-zA-Z0-9_]+)\s*=\s*(.+)", line)
+              if not m:
+                  continue
+
+              name = m.group(1).strip()
+              value = m.group(2).strip()
+              values[name] = value
+
+          def patch_default(text, name, value):
+              pattern = (
+                  r"(-\s+name:\s*" + re.escape(name) +
+                  r"\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
+              )
+
+              new_text, count = re.subn(
+                  pattern,
+                  lambda m: m.group(1) + value,
+                  text,
+                  count=1,
+                  flags=re.S
+              )
+
+              return new_text, count
+
+          patched = 0
+          missing = []
+
+          for name, value in values.items():
+              text, count = patch_default(text, name, value)
+
+              if count == 1:
+                  print(f"RUNA default patched: {name} = {value}")
+                  patched += 1
+              else:
+                  print(f"WARNING: setting not found: {name}")
+                  missing.append(name)
+
+          if patched == 0:
+              print("ERROR: no RUNA Advanced Tuning values were patched")
+              raise SystemExit(1)
+
+          path.write_text(text, encoding="utf-8")
+
+          print(f"Patched RUNA Advanced Tuning defaults: {patched}")
+
+          if missing:
+              print("Missing settings:")
+              for name in missing:
+                  print(" -", name)
+          PY
+
+      - name: Patch RUNA OSD layout and CH8 switch defaults
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/target/SPEEDYBEEF405WING/target.c")
+          text = path.read_text(encoding="utf-8")
+
+          if "void targetConfiguration(void)" in text:
+              print("ERROR: targetConfiguration already exists in target.c")
+              raise SystemExit(1)
+
+          patch = r'''
+
+          #include <stdbool.h>
+          #include <stdint.h>
+          #include "io/osd.h"
+          #include "programming/logic_condition.h"
+
+          static void runaSetOsdItem(uint8_t layout, uint16_t item, uint8_t x, uint8_t y, bool visible)
+          {
+              uint16_t pos = OSD_POS(x, y);
+
+              if (visible) {
+                  pos |= OSD_VISIBLE_FLAG;
+              }
+
+              osdLayoutsConfigMutable()->item_pos[layout][item] = pos;
+          }
+
+          static void runaSetLogic(uint8_t index, uint8_t enabled, int8_t activatorId, uint8_t operation,
+                                   uint8_t operandAType, int32_t operandAValue,
+                                   uint8_t operandBType, int32_t operandBValue,
+                                   uint8_t flags)
+          {
+              logicCondition_t *lc = logicConditionsMutable(index);
+
+              lc->enabled = enabled;
+              lc->activatorId = activatorId;
+              lc->operation = operation;
+              lc->operandA.type = operandAType;
+              lc->operandA.value = operandAValue;
+              lc->operandB.type = operandBType;
+              lc->operandB.value = operandBValue;
+              lc->flags = flags;
+          }
+
+          void targetConfiguration(void)
+          {
+              // =========================
+              // RUNA OSD DEFAULTS
+              // Layout 0 = обычный OSD
+              // Layout 1 = OSD + предупреждение о взводе
+              // Layout 2 = RUNA шторка
+              // =========================
+
+              for (uint8_t layout = 0; layout < OSD_LAYOUT_COUNT; layout++) {
+                  for (uint16_t item = 0; item < OSD_ITEM_COUNT; item++) {
+                      osdLayoutsConfigMutable()->item_pos[layout][item] = 0;
+                  }
+              }
+
+              // =========================
+              // LAYOUT 0 = обычный OSD
+              // =========================
+
+              runaSetOsdItem(0, 0,   22, 2,  true);
+              runaSetOsdItem(0, 1,   2,  13, true);
+              runaSetOsdItem(0, 2,   0,  0,  true);
+              runaSetOsdItem(0, 3,   8,  6,  true);
+              runaSetOsdItem(0, 9,   1,  3,  true);
+              runaSetOsdItem(0, 11,  5,  11, true);
+              runaSetOsdItem(0, 12,  23, 13, true);
+              runaSetOsdItem(0, 13,  13, 5,  true);
+              runaSetOsdItem(0, 14,  13, 3,  true);
+              runaSetOsdItem(0, 15,  4,  8,  true);
+              runaSetOsdItem(0, 24,  13, 2,  true);
+              runaSetOsdItem(0, 25,  23, 5,  true);
+              runaSetOsdItem(0, 30,  1,  14, true);
+              runaSetOsdItem(0, 110, 22, 3,  true);
+
+              // =========================
+              // LAYOUT 1 = OSD + предупреждение о взводе
+              // =========================
+
+              runaSetOsdItem(1, 0,   22, 2,  true);
+              runaSetOsdItem(1, 1,   2,  13, true);
+              runaSetOsdItem(1, 2,   0,  0,  true);
+              runaSetOsdItem(1, 3,   8,  6,  true);
+              runaSetOsdItem(1, 7,   13, 12, true);
+              runaSetOsdItem(1, 9,   1,  3,  true);
+              runaSetOsdItem(1, 11,  5,  11, true);
+              runaSetOsdItem(1, 12,  23, 13, true);
+              runaSetOsdItem(1, 13,  13, 5,  true);
+              runaSetOsdItem(1, 14,  13, 3,  true);
+              runaSetOsdItem(1, 15,  4,  8,  true);
+              runaSetOsdItem(1, 24,  13, 2,  true);
+              runaSetOsdItem(1, 25,  23, 5,  true);
+              runaSetOsdItem(1, 30,  1,  14, true);
+              runaSetOsdItem(1, 110, 22, 3,  true);
+
+              // Предупреждение / arming warning
+              runaSetOsdItem(1, 142, 12, 3,  true);
+
+              // =========================
+              // CH8 OSD SWITCHING
+              // logic 20-25
+              // =========================
+
+              for (uint8_t i = 20; i <= 25; i++) {
+                  runaSetLogic(i, 0, -1, 0, 0, 0, 0, 0, 0);
+              }
+
+              // CH8 LOW -> Layout 0
+              runaSetLogic(20, 1, -1, 4, 1, 8, 0, 0, 0);
+              runaSetLogic(21, 1, 20, 32, 0, 0, 0, 0, 0);
+
+              // CH8 MID -> Layout 2 / RUNA shutter
+              runaSetLogic(22, 1, -1, 5, 1, 8, 0, 0, 0);
+              runaSetLogic(23, 1, 22, 32, 0, 2, 0, 0, 0);
+
+              // CH8 HIGH -> Layout 1 / OSD + warning
+              runaSetLogic(24, 1, -1, 6, 1, 8, 0, 0, 0);
+              runaSetLogic(25, 1, 24, 32, 0, 1, 0, 0, 0);
+          }
+          '''
+
+          text = text + patch
+          path.write_text(text, encoding="utf-8")
+          print("Patched RUNA OSD layout defaults and CH8 switching into SPEEDYBEEF405WING targetConfiguration")
+          PY
+
+      - name: Patch RUNA 3.3GHz VTX table
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def sub_required(text, pattern, replacement, name, flags=0):
+              new_text, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if count != 1:
+                  print(f"ERROR: could not replace: {name}")
+                  print("PATTERN:", pattern)
+                  raise SystemExit(1)
+              return new_text
+
+          # =========================
+          # vtx_string.c
+          # FREQUENCYGROUP_1G3 -> RUNA 3.3GHz table
+          # =========================
+
+          path = Path("src/main/io/vtx_string.c")
+          text = path.read_text(encoding="utf-8")
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_BAND_COUNT 6",
+              "VTX_STRING_1G3_BAND_COUNT"
+          )
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_POWER_COUNT 5",
+              "VTX_STRING_1G3_POWER_COUNT"
+          )
+
+          text = sub_required(
+              text,
+              r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
+              """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
+              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 }, // RUNA 3.3 BAND_A
+              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 }, // RUNA 3.3 BAND_B
+              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 }, // RUNA 3.3 BAND_C
+              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 }, // RUNA 3.3 BAND_D
+              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 }, // RUNA 3.3 BAND_E
+              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 }, // RUNA 3.3 BAND_F
+          };""",
+              "vtx1G3frequencyTable",
+              flags=re.S
+          )
+
+          text = sub_required(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
+              "-", "A", "B", "C", "D", "E", "F",
+          };""",
+              "vtx1G3BandNames",
+              flags=re.S
+          )
+
+          text = sub_required(
+              text,
+              r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
+              'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
+              "vtx1G3BandLetter",
+              flags=re.S
+          )
+
+          text = sub_required(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
+              "---", "25", "200", "400", "800", "MAX"
+          };""",
+              "vtx1G3DefaultPowerNames",
+              flags=re.S
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("Patched vtx_string.c: FREQUENCYGROUP_1G3 is now RUNA 3.3GHz")
+
+          # =========================
+          # vtx_string.h
+          # =========================
+
+          path = Path("src/main/io/vtx_string.h")
+          text = path.read_text(encoding="utf-8")
+
+          text = sub_required(
+              text,
+              r"extern\s+const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*\d+\s*\]\s*\[\s*8\s*\]\s*;",
+              "extern const uint16_t vtx1G3frequencyTable[6][8];",
+              "vtx1G3frequencyTable extern"
+          )
+
+          text = text.replace(
+              "extern const char vtx51G3BandLetter[];",
+              "extern const char vtx1G3BandLetter[];"
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("Patched vtx_string.h")
+
+          # =========================
+          # vtx_tramp.h
+          # 1G3 limits -> RUNA 3.3GHz
+          # =========================
+
+          path = Path("src/main/io/vtx_tramp.h")
+          text = path.read_text(encoding="utf-8")
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_TRAMP_1G3_BAND_COUNT\s+\d+",
+              "#define VTX_TRAMP_1G3_BAND_COUNT 6",
+              "VTX_TRAMP_1G3_BAND_COUNT"
+          )
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_TRAMP_1G3_MAX_POWER_COUNT\s+\d+",
+              "#define VTX_TRAMP_1G3_MAX_POWER_COUNT 5",
+              "VTX_TRAMP_1G3_MAX_POWER_COUNT"
+          )
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ\s+\d+",
+              "#define VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ 3000",
+              "VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ"
+          )
+
+          text = sub_required(
+              text,
+              r"#define\s+VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ\s+\d+",
+              "#define VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ 3599",
+              "VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ"
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("Patched vtx_tramp.h")
+
+          # =========================
+          # vtx_tramp.c
+          # RUNA 3.3 power table
+          # =========================
+
+          path = Path("src/main/io/vtx_tramp.c")
+          text = path.read_text(encoding="utf-8")
+
+          text = sub_required(
+              text,
+              r"const\s+uint16_t\s+trampPowerTable_1G3_800\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\]\s*=\s*\{.*?\};",
+              "const uint16_t trampPowerTable_1G3_800[VTX_TRAMP_1G3_MAX_POWER_COUNT] = { 25, 200, 400, 800, 800 };",
+              "trampPowerTable_1G3_800",
+              flags=re.S
+          )
+
+          text = sub_required(
+              text,
+              r"const\s+char\s*\*\s+const\s+trampPowerNames_1G3_800\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              'const char * const trampPowerNames_1G3_800[VTX_TRAMP_1G3_MAX_POWER_COUNT + 1] = { "---", "25 ", "200", "400", "800", "800" };',
+              "trampPowerNames_1G3_800",
+              flags=re.S
+          )
+
+          text = sub_required(
+              text,
+              r"const\s+uint16_t\s+trampPowerTable_1G3_2000\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\]\s*=\s*\{.*?\};",
+              "const uint16_t trampPowerTable_1G3_2000[VTX_TRAMP_1G3_MAX_POWER_COUNT] = { 25, 200, 400, 800, 2000 };",
+              "trampPowerTable_1G3_2000",
+              flags=re.S
+          )
+
+          text = sub_required(
+              text,
+              r"const\s+char\s*\*\s+const\s+trampPowerNames_1G3_2000\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              'const char * const trampPowerNames_1G3_2000[VTX_TRAMP_1G3_MAX_POWER_COUNT + 1] = { "---", "25 ", "200", "400", "800", "2000" };',
+              "trampPowerNames_1G3_2000",
+              flags=re.S
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("Patched vtx_tramp.c")
+          PY
+
+      - name: Patch RUNA OSD shutter
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/osd.c")
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
+
+          replacement = r'''
+                  static bool runaShutterWasActive = false;
+                  static uint8_t runaShutterNextRow = 0;
+
+                  if (currentLayout == 2) {
+                      textAttributes_t runaAttr = TEXT_ATTRIBUTES_NONE;
+                      TEXT_ATTRIBUTES_ADD_SOLID_BG(runaAttr);
+
+                      char runaMask[64];
+
+                      uint8_t cols = osdDisplayPort->cols;
+                      uint8_t rows = osdDisplayPort->rows;
+
+                      if (cols > 63) {
+                          cols = 63;
+                      }
+
+                      const uint8_t windowWidth = cols >= 30 ? 10 : cols / 3;
+                      const uint8_t windowHeight = rows >= 16 ? 4 : rows / 3;
+
+                      const uint8_t windowX = (cols - windowWidth) / 2;
+                      const uint8_t windowY = (rows - windowHeight) / 2;
+
+                      if (!runaShutterWasActive) {
+                          displayClearScreen(osdDisplayPort);
+                          runaShutterWasActive = true;
+                          runaShutterNextRow = 0;
+                      }
+
+                      for (uint8_t pass = 0; pass < 2; pass++) {
+                          uint8_t y = runaShutterNextRow;
+
+                          const bool inWindowY = (y >= windowY) && (y < windowY + windowHeight);
+
+                          if (!inWindowY) {
+                              memset(runaMask, ' ', cols);
+                              runaMask[cols] = '\0';
+                              displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
+                          } else {
+                              if (windowX > 0) {
+                                  memset(runaMask, ' ', windowX);
+                                  runaMask[windowX] = '\0';
+                                  displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
+                              }
+
+                              const uint8_t rightX = windowX + windowWidth;
+                              if (rightX < cols) {
+                                  const uint8_t rightWidth = cols - rightX;
+                                  memset(runaMask, ' ', rightWidth);
+                                  runaMask[rightWidth] = '\0';
+                                  displayWriteWithAttr(osdDisplayPort, rightX, y, runaMask, runaAttr);
+                              }
+                          }
+
+                          runaShutterNextRow++;
+
+                          if (runaShutterNextRow >= rows) {
+                              runaShutterNextRow = 0;
+                          }
+                      }
+                  } else {
+                      if (runaShutterWasActive) {
+                          displayClearScreen(osdDisplayPort);
+                          runaShutterWasActive = false;
+                          runaShutterNextRow = 0;
+                      }
+
+                      osdDrawNextElement();
+                  }
+
+                  displayHeartbeat(osdDisplayPort);
+                  displayCommitTransaction(osdDisplayPort);'''
+
+          new_text, count = re.subn(pattern, replacement, text, count=1)
+
+          if count != 1:
+              print("ERROR: OSD draw block not found")
+              raise SystemExit(1)
+
+          path.write_text(new_text, encoding="utf-8")
+          print("Patched RUNA OSD shutter: Layout 2 = shutter with center window")
+          PY
 
       - name: Configure CMake
         run: |
           cd inav
-          mkdir build
+          mkdir -p build
           cd build
           cmake ..
 
-      - name: Build CADDXF4 AIO ELRS
+      - name: Check target exists
         run: |
           cd inav/build
-          make CADDXF4_AIO_ELRS -j$(nproc)
+          echo "Checking target: $TARGET"
+          make help | grep -w "$TARGET" || {
+            echo "TARGET NOT FOUND: $TARGET"
+            echo "Similar targets:"
+            make help | grep -i -E "SPEEDY|F405|WING" || true
+            exit 1
+          }
 
-      - name: Find built firmware
+      - name: Build SPEEDYBEEF405WING
         run: |
-          echo "Built firmware files:"
-          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
+          cd inav/build
+          make clean_${TARGET} || true
+          make ${TARGET} -j2 VERBOSE=1
 
-      - name: Patch RUNA name in HEX
+      - name: Find firmware
+        if: always()
         run: |
+          echo "===== BUILT FILES ====="
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+
+      - name: Collect and rename firmware
+        if: success()
+        run: |
+          mkdir -p out/${TARGET}
+
           python3 <<'PY'
           from pathlib import Path
+          import shutil
+          import os
 
-          old = b"CADDXF4_AIO_ELRS"
-          new = b"CADDXF4_AIO+RUNA"
+          target = os.environ["TARGET"]
+          build_dir = Path("inav/build")
+          out_dir = Path("out") / target
+          out_dir.mkdir(parents=True, exist_ok=True)
 
-          if len(old) != len(new):
-              raise SystemExit(f"Length mismatch: old={len(old)} new={len(new)}")
+          exts = {".hex", ".bin", ".elf"}
+          copied = 0
 
-          out = Path("out")
-          out.mkdir(exist_ok=True)
-
-          hex_files = list(Path("inav/build").rglob("*CADDXF4_AIO_ELRS*.hex"))
-          if not hex_files:
-              hex_files = list(Path("inav/build").rglob("*.hex"))
-
-          if not hex_files:
-              raise SystemExit("No HEX files found")
-
-          src = hex_files[0]
-          print("Using HEX:", src)
-
-          records = []
-          memory = {}
-          base = 0
-
-          def parse_record(line):
-              count = int(line[1:3], 16)
-              addr = int(line[3:7], 16)
-              rectype = int(line[7:9], 16)
-              data = bytes.fromhex(line[9:9 + count * 2])
-              return count, addr, rectype, data
-
-          for line in src.read_text().splitlines():
-              if not line.startswith(":"):
-                  records.append((line, None))
+          for file in build_dir.rglob("*"):
+              if not file.is_file():
+                  continue
+              if file.suffix.lower() not in exts:
+                  continue
+              if target not in file.name:
                   continue
 
-              count, addr, rectype, data = parse_record(line)
-              records.append((line, (count, addr, rectype, data, base)))
+              new_name = f"RUNA_SPEEDYBEE_1_0_3G3_SHUTTER_ADV_OSD_{file.name}"
+              dst = out_dir / new_name
+              shutil.copy2(file, dst)
+              print(f"Copied: {file} -> {dst}")
+              copied += 1
 
-              if rectype == 0:
-                  absolute = base + addr
-                  for i, b in enumerate(data):
-                      memory[absolute + i] = b
-              elif rectype == 4:
-                  base = int.from_bytes(data, "big") << 16
-              elif rectype == 2:
-                  base = int.from_bytes(data, "big") << 4
+          if copied == 0:
+              print("ERROR: no firmware files found for target", target)
+              raise SystemExit(1)
 
-          if not memory:
-              raise SystemExit("No data records found")
-
-          min_addr = min(memory)
-          max_addr = max(memory)
-          image = bytearray([0xFF] * (max_addr - min_addr + 1))
-
-          for addr, b in memory.items():
-              image[addr - min_addr] = b
-
-          pos = image.find(old)
-          if pos < 0:
-              raise SystemExit("Target string not found in complete HEX memory image")
-
-          abs_pos = min_addr + pos
-          print("Patch address:", hex(abs_pos))
-
-          for i, b in enumerate(new):
-              memory[abs_pos + i] = b
-
-          def checksum(record_bytes):
-              return ((~sum(record_bytes) + 1) & 0xFF)
-
-          patched_lines = []
-
-          for line, info in records:
-              if info is None:
-                  patched_lines.append(line)
-                  continue
-
-              count, addr, rectype, data, rec_base = info
-
-              if rectype == 0:
-                  absolute = rec_base + addr
-                  new_data = bytes(memory[absolute + i] for i in range(count))
-
-                  rec = bytearray()
-                  rec.append(count)
-                  rec.append((addr >> 8) & 0xFF)
-                  rec.append(addr & 0xFF)
-                  rec.append(rectype)
-                  rec.extend(new_data)
-                  chk = checksum(rec)
-
-                  patched_lines.append(":" + rec.hex().upper() + f"{chk:02X}")
-              else:
-                  patched_lines.append(line)
-
-          dst = out / "CADDXF4_RUNA.hex"
-          dst.write_text("\n".join(patched_lines) + "\n")
-          print("patched HEX written:", dst)
+          print(f"Total copied: {copied}")
           PY
 
+          echo "Collected files:"
+          find out -type f -print || true
+
       - name: Upload firmware
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: CADDXF4-RUNA-Firmware
-          path: out/CADDXF4_RUNA.hex
+          name: RUNA-SPEEDYBEEF405WING-1-0-3G3-SHUTTER-ADV-OSD
+          path: out/${{ env.TARGET }}/*
