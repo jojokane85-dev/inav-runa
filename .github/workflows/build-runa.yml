@@ -1,4 +1,4 @@
-name: Build RUNA FC 4.1 Simple 4e1e59eb
+name: Build RUNA FC 4.1 LSM6DXX
 
 on:
   workflow_dispatch:
@@ -10,7 +10,6 @@ jobs:
 
     env:
       TARGET: SPEEDYBEEF405WING
-      INAV_COMMIT: 4e1e59eb
 
     steps:
       - name: Install deps
@@ -31,17 +30,64 @@ jobs:
             python3 \
             python3-pip
 
-      - name: Clone INAV 4e1e59eb for FC 4.1
+      - name: Clone INAV
         run: |
-          git clone https://github.com/iNavFlight/inav.git
+          git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
+
+      - name: Patch FC 4.1 IMU to LSM6DXX
+        run: |
           cd inav
-          git fetch --all --tags --force
+          python3 <<'PY'
+          from pathlib import Path
+          import re
 
-          echo "Trying checkout commit: ${INAV_COMMIT}"
-          git checkout ${INAV_COMMIT}
+          path = Path("src/main/target/SPEEDYBEEF405WING/target.h")
+          text = path.read_text(encoding="utf-8")
 
-          echo "Current INAV commit:"
-          git rev-parse HEAD
+          # Убираем штатный ICM42605/ICM42688 из SPEEDYBEEF405WING
+          remove_patterns = [
+              r'^\s*#define\s+USE_IMU_ICM42605.*\n',
+              r'^\s*#define\s+IMU_ICM42605_ALIGN.*\n',
+              r'^\s*#define\s+ICM42605_CS_PIN.*\n',
+              r'^\s*#define\s+ICM42605_SPI_BUS.*\n',
+              r'^\s*#define\s+USE_IMU_ICM42688P.*\n',
+              r'^\s*#define\s+IMU_ICM42688P_ALIGN.*\n',
+              r'^\s*#define\s+ICM42688P_CS_PIN.*\n',
+              r'^\s*#define\s+ICM42688P_SPI_BUS.*\n',
+          ]
+
+          for pattern in remove_patterns:
+              text = re.sub(pattern, "", text, flags=re.M)
+
+          # Добавляем IMU как на твоей рабочей FC 4.1:
+          # PA4 = MPU CS
+          # PA5 = SPI1 SCK
+          # PA6 = SPI1 MISO
+          # PA7 = SPI1 MOSI
+          lsm_block = """
+
+          /*
+           * RUNA FC 4.1 IMU
+           * Working board status:
+           * GYRO=LSM6DXX, ACC=LSM6DXX
+           * SPI1: PA5/PA6/PA7, CS: PA4
+           */
+          #define USE_IMU_LSM6DXX
+          #define LSM6DXX_SPI_BUS BUS_SPI1
+          #define LSM6DXX_CS_PIN PA4
+          #define IMU_LSM6DXX_ALIGN CW0_DEG
+          """
+
+          if "USE_IMU_LSM6DXX" not in text:
+              text += lsm_block
+
+          path.write_text(text, encoding="utf-8")
+
+          print("Patched SPEEDYBEEF405WING target:")
+          print("IMU = LSM6DXX")
+          print("SPI = SPI1")
+          print("CS  = PA4")
+          PY
 
       - name: Patch RUNA name in Configurator
         run: |
@@ -391,7 +437,6 @@ jobs:
           import os
 
           target = os.environ["TARGET"]
-          commit = os.environ["INAV_COMMIT"]
           build_dir = Path("inav/build")
           out_dir = Path("out") / target
           out_dir.mkdir(parents=True, exist_ok=True)
@@ -406,7 +451,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_FC41_SIMPLE_{commit}_3G3_SHUTTER_{file.name}"
+              new_name = f"RUNA_FC41_LSM6DXX_3G3_SHUTTER_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
@@ -423,5 +468,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC41-SIMPLE-4e1e59eb-3G3-SHUTTER
+          name: RUNA-FC41-LSM6DXX-3G3-SHUTTER
           path: out/${{ env.TARGET }}/*
