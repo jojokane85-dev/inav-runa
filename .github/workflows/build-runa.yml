@@ -1,4 +1,4 @@
-name: Build RUNA FC 4.1 Simple Exact
+name: Build RUNA FC 4.1 Simple 4e1e59eb
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ jobs:
 
     env:
       TARGET: SPEEDYBEEF405WING
-      INAV_COMMIT: 62f1028d
+      INAV_COMMIT: 4e1e59eb
 
     steps:
       - name: Install deps
@@ -31,12 +31,16 @@ jobs:
             python3 \
             python3-pip
 
-      - name: Clone INAV exact FC 4.1 base
+      - name: Clone INAV 4e1e59eb for FC 4.1
         run: |
           git clone https://github.com/iNavFlight/inav.git
           cd inav
+          git fetch --all --tags --force
+
+          echo "Trying checkout commit: ${INAV_COMMIT}"
           git checkout ${INAV_COMMIT}
-          echo "INAV commit:"
+
+          echo "Current INAV commit:"
           git rev-parse HEAD
 
       - name: Patch RUNA name in Configurator
@@ -402,7 +406,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_FC41_SIMPLE_EXACT_{commit}_3G3_SHUTTER_{file.name}"
+              new_name = f"RUNA_FC41_SIMPLE_{commit}_3G3_SHUTTER_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
@@ -419,5 +423,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC41-SIMPLE-EXACT-62f1028d-3G3-SHUTTER
+          name: RUNA-FC41-SIMPLE-4e1e59eb-3G3-SHUTTER
           path: out/${{ env.TARGET }}/*
