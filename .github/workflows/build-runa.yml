@@ -1,4 +1,4 @@
-name: Build RUNA CADDXF405WING TEST
+name: Build RUNA CADDXF405WING TEST V2 IMU
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
         run: |
           git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
 
-      - name: Create experimental CADDXF405WING target
+      - name: Create experimental CADDXF405WING target V2 IMU
         run: |
           cd inav
 
@@ -47,7 +47,7 @@ jobs:
           cat > src/main/target/CADDXF405WING/target.h <<'EOF'
           /*
            * RUNA experimental target for CADDXF405 WING
-           * Based on user's CLI resource/dump.
+           * V2 IMU autoprobe.
            * TEST ONLY. Check on bench before flight.
            */
 
@@ -61,7 +61,6 @@ jobs:
           #define LED1 PA13
 
           // Beeper
-          #define USE_BEEPER
           #define BEEPER PC15
           #define BEEPER_INVERTED
 
@@ -71,7 +70,7 @@ jobs:
 
           #define USE_SPI
 
-          // SPI1 - GYRO/ACC LSM6DXX
+          // SPI1 - IMU
           #define USE_SPI_DEVICE_1
           #define SPI1_SCK_PIN PA5
           #define SPI1_MISO_PIN PA6
@@ -90,7 +89,7 @@ jobs:
           #define SPI3_MOSI_PIN PB5
 
           /*
-           * Serial ports from resource:
+           * Serial ports from your resource:
            * A09/A10 = UART1
            * C12     = UART5 TX/RX
            * C06/C07 = UART6
@@ -124,8 +123,16 @@ jobs:
           #define DEFAULT_I2C_BUS BUS_I2C1
 
           /*
-           * IMU - from status:
-           * GYRO=LSM6DXX, ACC=LSM6DXX
+           * IMU AUTOPROBE V2
+           *
+           * Original resource:
+           * A04 = MPU CS
+           * A05 = SPI1 SCK
+           * A06 = SPI1 MISO
+           * A07 = SPI1 MOSI
+           *
+           * We try several possible IMU chips on the same SPI1 / CS PA4.
+           * After one works, remove the extra drivers.
            */
 
           #define USE_IMU_LSM6DXX
@@ -133,9 +140,33 @@ jobs:
           #define LSM6DXX_CS_PIN PA4
           #define IMU_LSM6DXX_ALIGN CW0_DEG
 
+          #define USE_IMU_ICM42605
+          #define ICM42605_SPI_BUS BUS_SPI1
+          #define ICM42605_CS_PIN PA4
+          #define IMU_ICM42605_ALIGN CW270_DEG
+
+          #define USE_IMU_MPU6000
+          #define MPU6000_SPI_BUS BUS_SPI1
+          #define MPU6000_CS_PIN PA4
+          #define IMU_MPU6000_ALIGN CW0_DEG
+
+          #define USE_IMU_MPU6500
+          #define MPU6500_SPI_BUS BUS_SPI1
+          #define MPU6500_CS_PIN PA4
+          #define IMU_MPU6500_ALIGN CW0_DEG
+
+          #define USE_IMU_ICM20689
+          #define ICM20689_SPI_BUS BUS_SPI1
+          #define ICM20689_CS_PIN PA4
+          #define IMU_ICM20689_ALIGN CW0_DEG
+
+          #define USE_IMU_BMI270
+          #define BMI270_SPI_BUS BUS_SPI1
+          #define BMI270_CS_PIN PA4
+          #define IMU_BMI270_ALIGN CW0_DEG
+
           /*
-           * Barometer - from status:
-           * BARO=SPL06
+           * Barometer
            */
 
           #define USE_BARO
@@ -146,8 +177,7 @@ jobs:
           #define USE_BARO_MS5611
 
           /*
-           * Magnetometer - from status/dump:
-           * HMC5883 / QMC5883
+           * Magnetometer
            */
 
           #define USE_MAG
@@ -161,8 +191,7 @@ jobs:
           #define TEMPERATURE_I2C_BUS BUS_I2C1
 
           /*
-           * OSD - from status:
-           * MAX7456
+           * OSD
            */
 
           #define USE_OSD
@@ -228,8 +257,9 @@ jobs:
 
           cat > src/main/target/CADDXF405WING/target.c <<'EOF'
           /*
-           * RUNA experimental target for CADDXF405 WING
-           * Timer outputs are based on user's resource dump:
+           * RUNA experimental target for CADDXF405 WING.
+           *
+           * User resource:
            * PB7 = MOTOR1
            * PB6 = MOTOR2
            * PB0 = SERVO3
@@ -770,7 +800,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_CADDXF405WING_TEST_1_0_3G3_SHUTTER_ADV_{file.name}"
+              new_name = f"RUNA_CADDXF405WING_TEST_V2_IMU_1_0_3G3_SHUTTER_ADV_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
@@ -790,5 +820,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-CADDXF405WING-TEST-1-0-3G3-SHUTTER-ADV
+          name: RUNA-CADDXF405WING-TEST-V2-IMU-1-0-3G3-SHUTTER-ADV
           path: out/${{ env.TARGET }}/*
