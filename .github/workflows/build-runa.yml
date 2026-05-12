@@ -1,4 +1,4 @@
-name: Build RUNA SPEEDYBEEF405WING
+name: Build RUNA CADDXF405WING
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      TARGET: SPEEDYBEEF405WING
+      TARGET: CADDXF405WING
 
     steps:
       - name: Install deps
@@ -58,67 +58,6 @@ jobs:
 
           path.write_text(new_text, encoding="utf-8")
           print("Patched targetName -> targetName+RUNA")
-          PY
-
-      - name: Patch RUNA OSD flight mode names
-        run: |
-          cd inav
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("src/main/io/osd.c")
-          text = path.read_text(encoding="utf-8")
-
-          replacements = [
-              (r'char\s+\*p\s*=\s*"ACRO";', 'char *p = "Acro ";', "ACRO -> Acro"),
-              (r'p\s*=\s*"\sAH\s";', 'p = "AH   ";', "AH -> AH"),
-              (r'p\s*=\s*"ANGL";', 'p = "angle";', "ANGL -> angle"),
-              (r'p\s*=\s*"ANGH";', 'p = "AH   ";', "ANGH -> AH"),
-          ]
-
-          for pattern, replacement, label in replacements:
-              text, count = re.subn(pattern, replacement, text, count=1)
-              if count != 1:
-                  print(f"ERROR: could not patch flight mode: {label}")
-                  raise SystemExit(1)
-              print(f"Patched flight mode: {label}")
-
-          path.write_text(text, encoding="utf-8")
-          print("Patched RUNA OSD flight mode names: Acro / angle / AH")
-          PY
-
-      - name: Patch RUNA hide ALT on AUX1 MID
-        run: |
-          cd inav
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("src/main/io/osd.c")
-          text = path.read_text(encoding="utf-8")
-
-          pattern = r'(case\s+OSD_ALTITUDE:\s*\{\s*)'
-
-          replacement = r'''\1
-              // RUNA: AUX1 / CH5 MID hides only ALT.
-              // CH5 = AUX1 = rxGetChannelValue(4)
-              // CH5 MID range: 1333-1666
-              if (rxGetChannelValue(4) > 1333 && rxGetChannelValue(4) < 1666) {
-                  displayWrite(osdDisplayPort, elemPosX, elemPosY, "      ");
-                  return true;
-              }
-
-          '''
-
-          new_text, count = re.subn(pattern, replacement, text, count=1)
-
-          if count != 1:
-              print("ERROR: could not patch OSD_ALTITUDE")
-              raise SystemExit(1)
-
-          path.write_text(new_text, encoding="utf-8")
-          print("Patched RUNA: AUX1 MID hides ALT only")
           PY
 
       - name: Patch RUNA startup screen text
@@ -560,12 +499,15 @@ jobs:
           echo "Checking target: $TARGET"
           make help | grep -w "$TARGET" || {
             echo "TARGET NOT FOUND: $TARGET"
-            echo "Similar targets:"
-            make help | grep -i -E "SPEEDY|F405|WING" || true
+            echo ""
+            echo "CADDX / CADDY targets found:"
+            make help | grep -i -E "CADDX|CADDY|CAD" || true
+            echo ""
+            echo "If CADDXF405WING is not listed, replace TARGET with the real CADDX target from this list."
             exit 1
           }
 
-      - name: Build SPEEDYBEEF405WING
+      - name: Build CADDXF405WING
         run: |
           cd inav/build
           make clean_${TARGET} || true
@@ -603,7 +545,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_SPEEDYBEE_1_0_3G3_SHUTTER_ADV_HIDE_ALT_{file.name}"
+              new_name = f"RUNA_CADDXF405WING_1_0_3G3_SHUTTER_ADV_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
@@ -623,5 +565,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-SPEEDYBEEF405WING-1-0-3G3-SHUTTER-ADV-HIDE-ALT
+          name: RUNA-CADDXF405WING-1-0-3G3-SHUTTER-ADV
           path: out/${{ env.TARGET }}/*
