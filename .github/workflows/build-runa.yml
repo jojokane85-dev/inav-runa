@@ -1,4 +1,4 @@
-name: Build RUNA CADDXF405WING TEST V3 MANUAL IMU
+name: Build RUNA FC 4.1 Simple
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      TARGET: CADDXF405WING
+      TARGET: SPEEDYBEEF405WING
 
     steps:
       - name: Install deps
@@ -33,270 +33,6 @@ jobs:
       - name: Clone INAV
         run: |
           git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
-
-      - name: Create experimental CADDXF405WING target V3 manual IMU
-        run: |
-          cd inav
-
-          rm -rf src/main/target/CADDXF405WING
-          mkdir -p src/main/target/CADDXF405WING
-
-          cat > src/main/target/CADDXF405WING/CMakeLists.txt <<'EOF'
-          target_stm32f405xg(CADDXF405WING)
-          EOF
-
-          cat > src/main/target/CADDXF405WING/target.h <<'EOF'
-          /*
-           * RUNA experimental target for CADDXF405 WING
-           * V3 manual IMU hardware descriptors.
-           * TEST ONLY. Check on bench before flight.
-           */
-
-          #pragma once
-
-          #define TARGET_BOARD_IDENTIFIER "CD4W"
-          #define USBD_PRODUCT_STRING "CADDXF405 WING RUNA"
-
-          // LEDs
-          #define LED0 PA14
-          #define LED1 PA13
-
-          // Beeper
-          #define BEEPER PC15
-          #define BEEPER_INVERTED
-
-          /*
-           * SPI buses
-           */
-
-          #define USE_SPI
-
-          // SPI1 - IMU
-          #define USE_SPI_DEVICE_1
-          #define SPI1_SCK_PIN PA5
-          #define SPI1_MISO_PIN PA6
-          #define SPI1_MOSI_PIN PA7
-
-          // SPI2 - OSD MAX7456
-          #define USE_SPI_DEVICE_2
-          #define SPI2_SCK_PIN PB13
-          #define SPI2_MISO_PIN PC2
-          #define SPI2_MOSI_PIN PC3
-
-          // SPI3 - SD card
-          #define USE_SPI_DEVICE_3
-          #define SPI3_SCK_PIN PB3
-          #define SPI3_MISO_PIN PB4
-          #define SPI3_MOSI_PIN PB5
-
-          /*
-           * Serial ports from resource:
-           * PA9/PA10 = UART1
-           * PC12     = UART5 TX/RX
-           * PC6/PC7  = UART6
-           */
-
-          #define USE_VCP
-
-          #define USE_UART1
-          #define UART1_TX_PIN PA9
-          #define UART1_RX_PIN PA10
-
-          #define USE_UART5
-          #define UART5_TX_PIN PC12
-          #define UART5_RX_PIN PD2
-
-          #define USE_UART6
-          #define UART6_TX_PIN PC6
-          #define UART6_RX_PIN PC7
-
-          // VCP + UART1 + UART5 + UART6
-          #define SERIAL_PORT_COUNT 4
-
-          /*
-           * I2C1 - BARO/MAG
-           */
-
-          #define USE_I2C
-          #define USE_I2C_DEVICE_1
-          #define I2C1_SCL PB8
-          #define I2C1_SDA PB9
-          #define DEFAULT_I2C_BUS BUS_I2C1
-
-          /*
-           * IMU V3
-           *
-           * Отключаем стандартную регистрацию IMU из common_hardware.c
-           * и регистрируем IMU вручную в target.c.
-           */
-
-          #define USE_TARGET_IMU_HARDWARE_DESCRIPTORS
-
-          #define USE_IMU_LSM6DXX
-          #define USE_IMU_ICM42605
-          #define USE_IMU_MPU6000
-          #define USE_IMU_MPU6500
-          #define USE_IMU_ICM20689
-          #define USE_IMU_BMI270
-
-          /*
-           * Barometer
-           */
-
-          #define USE_BARO
-          #define BARO_I2C_BUS BUS_I2C1
-          #define USE_BARO_SPL06
-          #define USE_BARO_DPS310
-          #define USE_BARO_BMP280
-          #define USE_BARO_MS5611
-          #define USE_BARO_BMP085
-
-          /*
-           * Magnetometer
-           */
-
-          #define USE_MAG
-          #define MAG_I2C_BUS BUS_I2C1
-          #define USE_MAG_HMC5883
-          #define USE_MAG_QMC5883
-          #define USE_MAG_ALL
-
-          #define RANGEFINDER_I2C_BUS BUS_I2C1
-          #define PITOT_I2C_BUS BUS_I2C1
-          #define TEMPERATURE_I2C_BUS BUS_I2C1
-
-          /*
-           * OSD
-           */
-
-          #define USE_OSD
-          #define USE_MAX7456
-          #define MAX7456_SPI_BUS BUS_SPI2
-          #define MAX7456_CS_PIN PB12
-
-          /*
-           * SD card
-           */
-
-          #define USE_SDCARD
-          #define USE_SDCARD_SPI
-          #define SDCARD_SPI_BUS BUS_SPI3
-          #define SDCARD_CS_PIN PC14
-          #define ENABLE_BLACKBOX_LOGGING_ON_SDCARD_BY_DEFAULT
-
-          /*
-           * Receiver defaults
-           */
-
-          #define DEFAULT_RX_TYPE RX_TYPE_SERIAL
-          #define SERIALRX_PROVIDER SERIALRX_CRSF
-          #define SERIALRX_UART SERIAL_PORT_USART1
-
-          /*
-           * ADC from resource:
-           * PC0 = ADC CH1 / VBAT
-           * PC1 = ADC CH2 / CURRENT
-           */
-
-          #define USE_ADC
-          #define ADC_INSTANCE ADC1
-          #define ADC1_DMA_STREAM DMA2_Stream0
-
-          #define ADC_CHANNEL_1_PIN PC0
-          #define ADC_CHANNEL_2_PIN PC1
-
-          #define VBAT_ADC_CHANNEL ADC_CHN_1
-          #define CURRENT_METER_ADC_CHANNEL ADC_CHN_2
-
-          /*
-           * PINIO
-           */
-
-          #define USE_PINIO
-          #define USE_PINIOBOX
-          #define PINIO1_PIN PC13
-
-          /*
-           * Defaults
-           */
-
-          #define DEFAULT_FEATURES (FEATURE_TX_PROF_SEL | FEATURE_OSD | FEATURE_CURRENT_METER | FEATURE_VBAT | FEATURE_TELEMETRY | FEATURE_BLACKBOX | FEATURE_AIRMODE | FEATURE_VTX | FEATURE_PWM_OUTPUT_ENABLE)
-
-          #define CURRENT_METER_SCALE 160
-
-          #define USE_DSHOT
-          #define USE_ESC_SENSOR
-          #define USE_SERIAL_4WAY_BLHELI_INTERFACE
-
-          #define TARGET_IO_PORTA 0xffff
-          #define TARGET_IO_PORTB 0xffff
-          #define TARGET_IO_PORTC 0xffff
-          #define TARGET_IO_PORTD (BIT(2))
-
-          #define MAX_PWM_OUTPUT_PORTS 6
-          EOF
-
-          cat > src/main/target/CADDXF405WING/target.c <<'EOF'
-          /*
-           * RUNA experimental target for CADDXF405 WING.
-           * V3 manual IMU descriptors.
-           */
-
-          #include <platform.h>
-          #include <stdint.h>
-
-          #include "drivers/io.h"
-          #include "drivers/bus.h"
-          #include "drivers/sensor.h"
-          #include "drivers/pwm_mapping.h"
-          #include "drivers/timer.h"
-
-          /*
-           * IMU manual hardware descriptors.
-           *
-           * Original working firmware resource:
-           * PA4 = MPU CS
-           * PA5 = SPI1 SCK
-           * PA6 = SPI1 MISO
-           * PA7 = SPI1 MOSI
-           *
-           * Проверяем несколько возможных IMU на одном SPI1 / PA4.
-           */
-
-          BUSDEV_REGISTER_SPI(runa_busdev_lsm6dxx,  DEVHW_LSM6D,    BUS_SPI1, PA4, NONE, DEVFLAGS_NONE, CW0_DEG);
-          BUSDEV_REGISTER_SPI(runa_busdev_icm42605, DEVHW_ICM42605, BUS_SPI1, PA4, NONE, DEVFLAGS_NONE, CW270_DEG);
-          BUSDEV_REGISTER_SPI(runa_busdev_mpu6000,  DEVHW_MPU6000,  BUS_SPI1, PA4, NONE, DEVFLAGS_NONE, CW0_DEG);
-          BUSDEV_REGISTER_SPI(runa_busdev_mpu6500,  DEVHW_MPU6500,  BUS_SPI1, PA4, NONE, DEVFLAGS_NONE, CW0_DEG);
-          BUSDEV_REGISTER_SPI(runa_busdev_icm20689, DEVHW_ICM20689, BUS_SPI1, PA4, NONE, DEVFLAGS_NONE, CW0_DEG);
-          BUSDEV_REGISTER_SPI(runa_busdev_bmi270,   DEVHW_BMI270,   BUS_SPI1, PA4, NONE, DEVFLAGS_NONE, CW0_DEG);
-
-          /*
-           * Output timers from user's resource:
-           *
-           * PB7 = MOTOR1
-           * PB6 = MOTOR2
-           * PB0 = SERVO3
-           * PB1 = SERVO4
-           * PC8 = SERVO5
-           * PC9 = SERVO6
-           */
-
-          timerHardware_t timerHardware[] = {
-              DEF_TIM(TIM4, CH2,  PB7, TIM_USE_OUTPUT_AUTO, 1, 0), // MOTOR1
-              DEF_TIM(TIM4, CH1,  PB6, TIM_USE_OUTPUT_AUTO, 1, 0), // MOTOR2
-
-              DEF_TIM(TIM3, CH3,  PB0, TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO3
-              DEF_TIM(TIM3, CH4,  PB1, TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO4
-
-              DEF_TIM(TIM8, CH3,  PC8, TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO5
-              DEF_TIM(TIM8, CH4,  PC9, TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO6
-          };
-
-          const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
-          EOF
-
-          echo "Created V3 target:"
-          find src/main/target/CADDXF405WING -maxdepth 1 -type f -print
 
       - name: Patch RUNA name in Configurator
         run: |
@@ -352,140 +88,6 @@ jobs:
           print("Patched startup screen: version RUNA 1.0")
           PY
 
-      - name: Patch RUNA Advanced Tuning defaults
-        run: |
-          cd inav
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("src/main/fc/settings.yaml")
-          text = path.read_text(encoding="utf-8")
-
-          runa_cli_values = r"""
-          set rc_filter_auto = OFF
-          set deadband = 32
-          set airmode_type = STICK_CENTER_ONCE
-          set inav_w_z_baro_p = 0.350
-
-          set nav_extra_arming_safety = ON
-          set nav_wp_radius = 5000
-          set nav_wp_max_safe_distance = 500
-          set nav_rth_allow_landing = FS_ONLY
-          set nav_rth_altitude = 5000
-          set nav_fw_climb_angle = 12
-          set nav_fw_control_smoothness = 2
-
-          set nav_fw_launch_motor_delay = 1
-          set nav_fw_launch_spinup_time = 250
-          set nav_fw_launch_end_time = 5000
-          set nav_fw_launch_timeout = 50000
-          set nav_fw_launch_max_altitude = 5000
-          set nav_fw_launch_climb_angle = 15
-
-          set fw_p_pitch = 15
-          set fw_i_pitch = 5
-          set fw_d_pitch = 5
-          set fw_ff_pitch = 80
-
-          set fw_p_roll = 15
-          set fw_i_roll = 3
-
-          set max_angle_inclination_rll = 450
-          set dterm_lpf_hz = 10
-
-          set fw_turn_assist_yaw_gain = 2.000
-          set fw_turn_assist_pitch_gain = 0.600
-
-          set nav_fw_pos_z_p = 25
-          set nav_fw_pos_z_d = 8
-          set nav_fw_pos_xy_p = 55
-
-          set d_boost_min = 1.000
-          set d_boost_max = 1.000
-
-          set rc_expo = 30
-          set rc_yaw_expo = 30
-
-          set roll_rate = 18
-          set pitch_rate = 9
-          set yaw_rate = 3
-
-          set throttle_idle = 5.000
-          set nav_mc_hover_thr = 1600
-          set nav_fw_cruise_thr = 1650
-          set nav_fw_min_thr = 1550
-          set nav_fw_max_thr = 1800
-          set nav_fw_pitch2thr = 6
-          set nav_fw_launch_thr = 2000
-          set nav_fw_launch_idle_thr = 1750
-          """
-
-          values = {}
-
-          for line in runa_cli_values.splitlines():
-              line = line.strip()
-              if not line or line.startswith("#"):
-                  continue
-
-              m = re.match(r"set\s+([a-zA-Z0-9_]+)\s*=\s*(.+)", line)
-              if not m:
-                  continue
-
-              values[m.group(1).strip()] = m.group(2).strip()
-
-          def patch_default(text, name, value):
-              pattern = (
-                  r"(-\s+name:\s*" + re.escape(name) +
-                  r"\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
-              )
-
-              def repl(m):
-                  old_value = m.group(2).strip()
-
-                  if old_value.startswith('"') or old_value.startswith("'"):
-                      escaped = value.replace('"', '\\"')
-                      return m.group(1) + '"' + escaped + '"'
-
-                  return m.group(1) + value
-
-              new_text, count = re.subn(
-                  pattern,
-                  repl,
-                  text,
-                  count=1,
-                  flags=re.S
-              )
-
-              return new_text, count
-
-          patched = 0
-          missing = []
-
-          for name, value in values.items():
-              text, count = patch_default(text, name, value)
-
-              if count == 1:
-                  print(f"RUNA default patched: {name} = {value}")
-                  patched += 1
-              else:
-                  print(f"WARNING: setting not found: {name}")
-                  missing.append(name)
-
-          if patched == 0:
-              print("ERROR: no RUNA Advanced Tuning values were patched")
-              raise SystemExit(1)
-
-          path.write_text(text, encoding="utf-8")
-
-          print(f"Patched RUNA Advanced Tuning defaults: {patched}")
-
-          if missing:
-              print("Missing settings:")
-              for name in missing:
-                  print(" -", name)
-          PY
-
       - name: Patch RUNA 3.3GHz VTX table
         run: |
           cd inav
@@ -497,7 +99,6 @@ jobs:
               new_text, count = re.subn(pattern, replacement, text, count=1, flags=flags)
               if count != 1:
                   print(f"ERROR: could not replace: {name}")
-                  print("PATTERN:", pattern)
                   raise SystemExit(1)
               return new_text
 
@@ -562,97 +163,7 @@ jobs:
           )
 
           path.write_text(text, encoding="utf-8")
-          print("Patched vtx_string.c")
-
-          path = Path("src/main/io/vtx_string.h")
-          text = path.read_text(encoding="utf-8")
-
-          text = sub_required(
-              text,
-              r"extern\s+const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*\d+\s*\]\s*\[\s*8\s*\]\s*;",
-              "extern const uint16_t vtx1G3frequencyTable[6][8];",
-              "vtx1G3frequencyTable extern"
-          )
-
-          text = text.replace(
-              "extern const char vtx51G3BandLetter[];",
-              "extern const char vtx1G3BandLetter[];"
-          )
-
-          path.write_text(text, encoding="utf-8")
-          print("Patched vtx_string.h")
-
-          path = Path("src/main/io/vtx_tramp.h")
-          text = path.read_text(encoding="utf-8")
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_TRAMP_1G3_BAND_COUNT\s+\d+",
-              "#define VTX_TRAMP_1G3_BAND_COUNT 6",
-              "VTX_TRAMP_1G3_BAND_COUNT"
-          )
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_TRAMP_1G3_MAX_POWER_COUNT\s+\d+",
-              "#define VTX_TRAMP_1G3_MAX_POWER_COUNT 5",
-              "VTX_TRAMP_1G3_MAX_POWER_COUNT"
-          )
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ\s+\d+",
-              "#define VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ 3000",
-              "VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ"
-          )
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ\s+\d+",
-              "#define VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ 3599",
-              "VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ"
-          )
-
-          path.write_text(text, encoding="utf-8")
-          print("Patched vtx_tramp.h")
-
-          path = Path("src/main/io/vtx_tramp.c")
-          text = path.read_text(encoding="utf-8")
-
-          text = sub_required(
-              text,
-              r"const\s+uint16_t\s+trampPowerTable_1G3_800\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\]\s*=\s*\{.*?\};",
-              "const uint16_t trampPowerTable_1G3_800[VTX_TRAMP_1G3_MAX_POWER_COUNT] = { 25, 200, 400, 800, 800 };",
-              "trampPowerTable_1G3_800",
-              flags=re.S
-          )
-
-          text = sub_required(
-              text,
-              r"const\s+char\s*\*\s+const\s+trampPowerNames_1G3_800\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              'const char * const trampPowerNames_1G3_800[VTX_TRAMP_1G3_MAX_POWER_COUNT + 1] = { "---", "25 ", "200", "400", "800", "800" };',
-              "trampPowerNames_1G3_800",
-              flags=re.S
-          )
-
-          text = sub_required(
-              text,
-              r"const\s+uint16_t\s+trampPowerTable_1G3_2000\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\]\s*=\s*\{.*?\};",
-              "const uint16_t trampPowerTable_1G3_2000[VTX_TRAMP_1G3_MAX_POWER_COUNT] = { 25, 200, 400, 800, 2000 };",
-              "trampPowerTable_1G3_2000",
-              flags=re.S
-          )
-
-          text = sub_required(
-              text,
-              r"const\s+char\s*\*\s+const\s+trampPowerNames_1G3_2000\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              'const char * const trampPowerNames_1G3_2000[VTX_TRAMP_1G3_MAX_POWER_COUNT + 1] = { "---", "25 ", "200", "400", "800", "2000" };',
-              "trampPowerNames_1G3_2000",
-              flags=re.S
-          )
-
-          path.write_text(text, encoding="utf-8")
-          print("Patched vtx_tramp.c")
+          print("Patched RUNA 3.3GHz VTX table")
           PY
 
       - name: Patch RUNA OSD shutter
@@ -757,23 +268,11 @@ jobs:
           cd build
           cmake ..
 
-      - name: Check target exists
-        run: |
-          cd inav/build
-          echo "Checking target: $TARGET"
-          make help | grep -w "$TARGET" || {
-            echo "TARGET NOT FOUND: $TARGET"
-            echo ""
-            echo "Targets containing CADDX/RUNA/F405/WING:"
-            make help | grep -i -E "CADDX|RUNA|F405|WING" || true
-            exit 1
-          }
-
-      - name: Build CADDXF405WING
+      - name: Build SPEEDYBEEF405WING
         run: |
           cd inav/build
           make clean_${TARGET} || true
-          make ${TARGET} -j2 VERBOSE=1
+          make ${TARGET} -j2
 
       - name: Find firmware
         if: always()
@@ -796,36 +295,32 @@ jobs:
           out_dir = Path("out") / target
           out_dir.mkdir(parents=True, exist_ok=True)
 
-          exts = {".hex", ".bin", ".elf"}
           copied = 0
 
           for file in build_dir.rglob("*"):
               if not file.is_file():
                   continue
-              if file.suffix.lower() not in exts:
+              if file.suffix.lower() not in {".hex", ".bin", ".elf"}:
                   continue
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_CADDXF405WING_TEST_V3_MANUAL_IMU_1_0_3G3_SHUTTER_ADV_{file.name}"
+              new_name = f"RUNA_FC41_SIMPLE_3G3_SHUTTER_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
               copied += 1
 
           if copied == 0:
-              print("ERROR: no firmware files found for target", target)
+              print("ERROR: no firmware files found")
               raise SystemExit(1)
 
           print(f"Total copied: {copied}")
           PY
 
-          echo "Collected files:"
-          find out -type f -print || true
-
       - name: Upload firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-CADDXF405WING-TEST-V3-MANUAL-IMU-1-0-3G3-SHUTTER-ADV
+          name: RUNA-FC41-SIMPLE-3G3-SHUTTER
           path: out/${{ env.TARGET }}/*
