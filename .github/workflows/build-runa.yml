@@ -1,4 +1,4 @@
-name: Build RUNA FC 4.1 LSM6DXX
+name: Build RUNA FC 4.1 LSM6DXX HARD
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
         run: |
           git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
 
-      - name: Patch FC 4.1 IMU to LSM6DXX
+      - name: Patch FC 4.1 IMU to LSM6DXX HARD
         run: |
           cd inav
           python3 <<'PY'
@@ -44,33 +44,41 @@ jobs:
           path = Path("src/main/target/SPEEDYBEEF405WING/target.h")
           text = path.read_text(encoding="utf-8")
 
-          # Убираем штатный ICM42605/ICM42688 из SPEEDYBEEF405WING
+          # Полностью вырезаем штатный ICM42605 / ICM42688P из SPEEDYBEEF405WING
           remove_patterns = [
-              r'^\s*#define\s+USE_IMU_ICM42605.*\n',
-              r'^\s*#define\s+IMU_ICM42605_ALIGN.*\n',
-              r'^\s*#define\s+ICM42605_CS_PIN.*\n',
-              r'^\s*#define\s+ICM42605_SPI_BUS.*\n',
-              r'^\s*#define\s+USE_IMU_ICM42688P.*\n',
-              r'^\s*#define\s+IMU_ICM42688P_ALIGN.*\n',
-              r'^\s*#define\s+ICM42688P_CS_PIN.*\n',
-              r'^\s*#define\s+ICM42688P_SPI_BUS.*\n',
+              r'//\s*ICM42605/ICM42688P\s*',
+              r'#define\s+USE_IMU_ICM42605\s*',
+              r'#define\s+IMU_ICM42605_ALIGN\s+\S+\s*',
+              r'#define\s+ICM42605_CS_PIN\s+\S+\s*',
+              r'#define\s+ICM42605_SPI_BUS\s+\S+\s*',
+
+              r'#define\s+USE_IMU_ICM42688P\s*',
+              r'#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*',
+              r'#define\s+ICM42688P_CS_PIN\s+\S+\s*',
+              r'#define\s+ICM42688P_SPI_BUS\s+\S+\s*',
+
+              r'#define\s+USE_IMU_LSM6DXX\s*',
+              r'#define\s+LSM6DXX_SPI_BUS\s+\S+\s*',
+              r'#define\s+LSM6DXX_CS_PIN\s+\S+\s*',
+              r'#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*',
           ]
 
           for pattern in remove_patterns:
               text = re.sub(pattern, "", text, flags=re.M)
 
-          # Добавляем IMU как на твоей рабочей FC 4.1:
-          # PA4 = MPU CS
-          # PA5 = SPI1 SCK
-          # PA6 = SPI1 MISO
-          # PA7 = SPI1 MOSI
           lsm_block = """
 
           /*
-           * RUNA FC 4.1 IMU
-           * Working board status:
+           * RUNA FC 4.1 IMU HARD PATCH
+           *
+           * Working FC 4.1 resource/status:
+           * PA4 = MPU CS
+           * PA5 = SPI1 SCK
+           * PA6 = SPI1 MISO
+           * PA7 = SPI1 MOSI
+           *
+           * CPU status on working firmware:
            * GYRO=LSM6DXX, ACC=LSM6DXX
-           * SPI1: PA5/PA6/PA7, CS: PA4
            */
           #define USE_IMU_LSM6DXX
           #define LSM6DXX_SPI_BUS BUS_SPI1
@@ -78,15 +86,74 @@ jobs:
           #define IMU_LSM6DXX_ALIGN CW0_DEG
           """
 
-          if "USE_IMU_LSM6DXX" not in text:
-              text += lsm_block
-
+          text += lsm_block
           path.write_text(text, encoding="utf-8")
 
-          print("Patched SPEEDYBEEF405WING target:")
-          print("IMU = LSM6DXX")
-          print("SPI = SPI1")
-          print("CS  = PA4")
+          check = path.read_text(encoding="utf-8")
+
+          forbidden = [
+              "USE_IMU_ICM42605",
+              "IMU_ICM42605_ALIGN",
+              "ICM42605_CS_PIN",
+              "ICM42605_SPI_BUS",
+              "USE_IMU_ICM42688P",
+              "IMU_ICM42688P_ALIGN",
+              "ICM42688P_CS_PIN",
+              "ICM42688P_SPI_BUS",
+          ]
+
+          for item in forbidden:
+              if item in check:
+                  print(f"ERROR: forbidden IMU line still exists: {item}")
+                  raise SystemExit(1)
+
+          required = [
+              "USE_IMU_LSM6DXX",
+              "LSM6DXX_SPI_BUS BUS_SPI1",
+              "LSM6DXX_CS_PIN PA4",
+              "IMU_LSM6DXX_ALIGN",
+          ]
+
+          for item in required:
+              if item not in check:
+                  print(f"ERROR: required LSM6DXX line missing: {item}")
+                  raise SystemExit(1)
+
+          print("==== RUNA FC 4.1 IMU PATCH OK ====")
+          print("ICM42605 removed")
+          print("ICM42688P removed")
+          print("LSM6DXX added")
+          print("SPI BUS: BUS_SPI1")
+          print("CS PIN : PA4")
+          PY
+
+          echo "==== CHECK target.h IMU lines ===="
+          grep -n -E "IMU|LSM6|ICM426|MPU|SPI1|PA4" src/main/target/SPEEDYBEEF405WING/target.h || true
+
+      - name: Patch default acc hardware to LSM6DXX
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/fc/settings.yaml")
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r"(-\s+name:\s*acc_hardware\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
+
+          def repl(m):
+              old = m.group(2).strip()
+              print(f"acc_hardware default old: {old}")
+              return m.group(1) + "LSM6DXX"
+
+          text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
+
+          if count != 1:
+              print("WARNING: acc_hardware default not patched in settings.yaml")
+          else:
+              print("acc_hardware default patched to LSM6DXX")
+              path.write_text(text, encoding="utf-8")
           PY
 
       - name: Patch RUNA name in Configurator
@@ -451,7 +518,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_FC41_LSM6DXX_3G3_SHUTTER_{file.name}"
+              new_name = f"RUNA_FC41_LSM6DXX_HARD_3G3_SHUTTER_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
@@ -468,5 +535,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC41-LSM6DXX-3G3-SHUTTER
+          name: RUNA-FC41-LSM6DXX-HARD-3G3-SHUTTER
           path: out/${{ env.TARGET }}/*
