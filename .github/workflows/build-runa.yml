@@ -1,4 +1,4 @@
-name: Build RUNA CADDXF405
+name: Build RUNA CADDXF405WING TEST
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      TARGET: CADDXF405
+      TARGET: CADDXF405WING
 
     steps:
       - name: Install deps
@@ -33,6 +33,233 @@ jobs:
       - name: Clone INAV
         run: |
           git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
+
+      - name: Create experimental CADDXF405WING target
+        run: |
+          cd inav
+
+          mkdir -p src/main/target/CADDXF405WING
+
+          cat > src/main/target/CADDXF405WING/CMakeLists.txt <<'EOF'
+          target_stm32f405xg(CADDXF405WING)
+          EOF
+
+          cat > src/main/target/CADDXF405WING/target.h <<'EOF'
+          /*
+           * RUNA experimental target for CADDXF405 WING
+           * Based on user's CLI resource/dump.
+           * TEST ONLY. Check on bench before flight.
+           */
+
+          #pragma once
+
+          #define TARGET_BOARD_IDENTIFIER "CD4W"
+          #define USBD_PRODUCT_STRING "CADDXF405 WING RUNA"
+
+          // LEDs
+          #define LED0 PA14
+          #define LED1 PA13
+
+          // Beeper
+          #define USE_BEEPER
+          #define BEEPER PC15
+          #define BEEPER_INVERTED
+
+          /*
+           * SPI buses
+           */
+
+          #define USE_SPI
+
+          // SPI1 - GYRO/ACC LSM6DXX
+          #define USE_SPI_DEVICE_1
+          #define SPI1_SCK_PIN PA5
+          #define SPI1_MISO_PIN PA6
+          #define SPI1_MOSI_PIN PA7
+
+          // SPI2 - OSD MAX7456
+          #define USE_SPI_DEVICE_2
+          #define SPI2_SCK_PIN PB13
+          #define SPI2_MISO_PIN PC2
+          #define SPI2_MOSI_PIN PC3
+
+          // SPI3 - SD card
+          #define USE_SPI_DEVICE_3
+          #define SPI3_SCK_PIN PB3
+          #define SPI3_MISO_PIN PB4
+          #define SPI3_MOSI_PIN PB5
+
+          /*
+           * Serial ports from resource:
+           * A09/A10 = UART1
+           * C12     = UART5 TX/RX
+           * C06/C07 = UART6
+           */
+
+          #define USE_VCP
+
+          #define USE_UART1
+          #define UART1_TX_PIN PA9
+          #define UART1_RX_PIN PA10
+
+          #define USE_UART5
+          #define UART5_TX_PIN PC12
+          #define UART5_RX_PIN PD2
+
+          #define USE_UART6
+          #define UART6_TX_PIN PC6
+          #define UART6_RX_PIN PC7
+
+          // VCP + UART1 + UART5 + UART6
+          #define SERIAL_PORT_COUNT 4
+
+          /*
+           * I2C1 - BARO/MAG
+           */
+
+          #define USE_I2C
+          #define USE_I2C_DEVICE_1
+          #define I2C1_SCL PB8
+          #define I2C1_SDA PB9
+          #define DEFAULT_I2C_BUS BUS_I2C1
+
+          /*
+           * IMU - from status:
+           * GYRO=LSM6DXX, ACC=LSM6DXX
+           */
+
+          #define USE_IMU_LSM6DXX
+          #define LSM6DXX_SPI_BUS BUS_SPI1
+          #define LSM6DXX_CS_PIN PA4
+          #define IMU_LSM6DXX_ALIGN CW0_DEG
+
+          /*
+           * Barometer - from status:
+           * BARO=SPL06
+           */
+
+          #define USE_BARO
+          #define BARO_I2C_BUS BUS_I2C1
+          #define USE_BARO_SPL06
+          #define USE_BARO_DPS310
+          #define USE_BARO_BMP280
+          #define USE_BARO_MS5611
+
+          /*
+           * Magnetometer - from status/dump:
+           * HMC5883 / QMC5883
+           */
+
+          #define USE_MAG
+          #define MAG_I2C_BUS BUS_I2C1
+          #define USE_MAG_HMC5883
+          #define USE_MAG_QMC5883
+          #define USE_MAG_ALL
+
+          #define RANGEFINDER_I2C_BUS BUS_I2C1
+          #define PITOT_I2C_BUS BUS_I2C1
+          #define TEMPERATURE_I2C_BUS BUS_I2C1
+
+          /*
+           * OSD - from status:
+           * MAX7456
+           */
+
+          #define USE_OSD
+          #define USE_MAX7456
+          #define MAX7456_SPI_BUS BUS_SPI2
+          #define MAX7456_CS_PIN PB12
+
+          /*
+           * SD card
+           */
+
+          #define USE_SDCARD
+          #define USE_SDCARD_SPI
+          #define SDCARD_SPI_BUS BUS_SPI3
+          #define SDCARD_CS_PIN PC14
+          #define ENABLE_BLACKBOX_LOGGING_ON_SDCARD_BY_DEFAULT
+
+          /*
+           * Receiver defaults
+           */
+
+          #define DEFAULT_RX_TYPE RX_TYPE_SERIAL
+          #define SERIALRX_PROVIDER SERIALRX_CRSF
+          #define SERIALRX_UART SERIAL_PORT_USART1
+
+          /*
+           * ADC from resource:
+           * C00 = ADC CH1 / VBAT
+           * C01 = ADC CH2 / CURRENT
+           */
+
+          #define USE_ADC
+          #define ADC_INSTANCE ADC1
+          #define ADC1_DMA_STREAM DMA2_Stream0
+          #define ADC_CHANNEL_1_PIN PC0
+          #define ADC_CHANNEL_2_PIN PC1
+          #define VBAT_ADC_CHANNEL ADC_CHN_1
+          #define CURRENT_METER_ADC_CHANNEL ADC_CHN_2
+
+          /*
+           * PINIO
+           */
+
+          #define USE_PINIO
+          #define USE_PINIOBOX
+          #define PINIO1_PIN PC13
+
+          /*
+           * Defaults
+           */
+
+          #define DEFAULT_FEATURES (FEATURE_TX_PROF_SEL | FEATURE_VBAT | FEATURE_CURRENT_METER | FEATURE_TELEMETRY | FEATURE_BLACKBOX | FEATURE_AIRMODE | FEATURE_VTX | FEATURE_PWM_OUTPUT_ENABLE | FEATURE_OSD)
+
+          #define CURRENT_METER_SCALE 160
+
+          #define TARGET_IO_PORTA 0xffff
+          #define TARGET_IO_PORTB 0xffff
+          #define TARGET_IO_PORTC 0xffff
+          #define TARGET_IO_PORTD (BIT(2))
+
+          #define MAX_PWM_OUTPUT_PORTS 6
+          EOF
+
+          cat > src/main/target/CADDXF405WING/target.c <<'EOF'
+          /*
+           * RUNA experimental target for CADDXF405 WING
+           * Timer outputs are based on user's resource dump:
+           * PB7 = MOTOR1
+           * PB6 = MOTOR2
+           * PB0 = SERVO3
+           * PB1 = SERVO4
+           * PC8 = SERVO5
+           * PC9 = SERVO6
+           */
+
+          #include <stdint.h>
+
+          #include "drivers/io.h"
+          #include "drivers/pwm_mapping.h"
+          #include "drivers/timer.h"
+
+          timerHardware_t timerHardware[] = {
+              DEF_TIM(TIM4, CH2,  PB7, TIM_USE_OUTPUT_AUTO, 1, 0), // MOTOR1
+              DEF_TIM(TIM4, CH1,  PB6, TIM_USE_OUTPUT_AUTO, 1, 0), // MOTOR2
+
+              DEF_TIM(TIM3, CH3,  PB0, TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO3
+              DEF_TIM(TIM3, CH4,  PB1, TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO4
+
+              DEF_TIM(TIM8, CH3,  PC8, TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO5
+              DEF_TIM(TIM8, CH4,  PC9, TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO6
+          };
+
+          const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
+          EOF
+
+          echo "Created target:"
+          find src/main/target/CADDXF405WING -type f -maxdepth 1 -print
 
       - name: Patch RUNA name in Configurator
         run: |
@@ -500,12 +727,12 @@ jobs:
           make help | grep -w "$TARGET" || {
             echo "TARGET NOT FOUND: $TARGET"
             echo ""
-            echo "F405 / CAD targets found:"
-            make help | grep -i -E "F405|CAD|CADDY|CADDX" || true
+            echo "Targets containing CADDX/RUNA/F405/WING:"
+            make help | grep -i -E "CADDX|RUNA|F405|WING" || true
             exit 1
           }
 
-      - name: Build CADDXF405
+      - name: Build CADDXF405WING
         run: |
           cd inav/build
           make clean_${TARGET} || true
@@ -543,7 +770,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_CADDXF405_1_0_3G3_SHUTTER_ADV_{file.name}"
+              new_name = f"RUNA_CADDXF405WING_TEST_1_0_3G3_SHUTTER_ADV_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
@@ -563,5 +790,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-CADDXF405-1-0-3G3-SHUTTER-ADV
+          name: RUNA-CADDXF405WING-TEST-1-0-3G3-SHUTTER-ADV
           path: out/${{ env.TARGET }}/*
