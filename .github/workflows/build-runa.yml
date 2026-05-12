@@ -1,4 +1,4 @@
-name: Build RUNA CADDXF405WING
+name: Build RUNA CADDXF405
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      TARGET: CADDXF405WING
+      TARGET: CADDXF405
 
     steps:
       - name: Install deps
@@ -500,14 +500,12 @@ jobs:
           make help | grep -w "$TARGET" || {
             echo "TARGET NOT FOUND: $TARGET"
             echo ""
-            echo "CADDX / CADDY targets found:"
-            make help | grep -i -E "CADDX|CADDY|CAD" || true
-            echo ""
-            echo "If CADDXF405WING is not listed, replace TARGET with the real CADDX target from this list."
+            echo "F405 / CAD targets found:"
+            make help | grep -i -E "F405|CAD|CADDY|CADDX" || true
             exit 1
           }
 
-      - name: Build CADDXF405WING
+      - name: Build CADDXF405
         run: |
           cd inav/build
           make clean_${TARGET} || true
@@ -545,7 +543,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              new_name = f"RUNA_CADDXF405WING_1_0_3G3_SHUTTER_ADV_{file.name}"
+              new_name = f"RUNA_CADDXF405_1_0_3G3_SHUTTER_ADV_{file.name}"
               dst = out_dir / new_name
               shutil.copy2(file, dst)
               print(f"Copied: {file} -> {dst}")
@@ -565,5 +563,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-CADDXF405WING-1-0-3G3-SHUTTER-ADV
+          name: RUNA-CADDXF405-1-0-3G3-SHUTTER-ADV
           path: out/${{ env.TARGET }}/*
