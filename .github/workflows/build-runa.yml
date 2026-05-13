@@ -1,4 +1,4 @@
-name: Build RUNA FC41 INAV 7.1.2 LSM6DXX DRIVER PATCH
+name: Build RUNA FC41 INAV 7.1.2 LSM6DXX ROBUST
 
 on:
   workflow_dispatch:
@@ -34,6 +34,7 @@ jobs:
         run: |
           git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
           cd inav
+          echo "Current commit:"
           git rev-parse HEAD
 
       - name: Patch FC41 target to LSM6DXX
@@ -52,24 +53,30 @@ jobs:
               r'#define\s+IMU_ICM42605_ALIGN\s+\S+\s*',
               r'#define\s+ICM42605_CS_PIN\s+\S+\s*',
               r'#define\s+ICM42605_SPI_BUS\s+\S+\s*',
+
               r'#define\s+USE_IMU_ICM42688P\s*',
               r'#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*',
               r'#define\s+ICM42688P_CS_PIN\s+\S+\s*',
               r'#define\s+ICM42688P_SPI_BUS\s+\S+\s*',
+
               r'#define\s+USE_IMU_LSM6DXX\s*',
               r'#define\s+LSM6DXX_SPI_BUS\s+\S+\s*',
               r'#define\s+LSM6DXX_CS_PIN\s+\S+\s*',
               r'#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*',
           ]
 
-          for p in remove_patterns:
-              text = re.sub(p, "", text, flags=re.M)
+          for pattern in remove_patterns:
+              text = re.sub(pattern, "", text, flags=re.M)
 
           text += """
 
           /*
            * RUNA FC 4.1 IMU
-           * Diagnostic result: LSM6DXX FOUND
+           *
+           * Diagnostic result:
+           * LED1 blinked 3 times = LSM6DXX FOUND
+           *
+           * Working pins:
            * PA4 = MPU CS
            * PA5 = SPI1 SCK
            * PA6 = SPI1 MISO
@@ -84,60 +91,93 @@ jobs:
           path.write_text(text, encoding="utf-8")
 
           check = path.read_text(encoding="utf-8")
-          for bad in ["USE_IMU_ICM42605", "ICM42605_CS_PIN", "USE_IMU_ICM42688P", "ICM42688P_CS_PIN"]:
-              if bad in check:
-                  print("ERROR still exists:", bad)
+
+          forbidden = [
+              "USE_IMU_ICM42605",
+              "ICM42605_CS_PIN",
+              "ICM42605_SPI_BUS",
+              "USE_IMU_ICM42688P",
+              "ICM42688P_CS_PIN",
+              "ICM42688P_SPI_BUS",
+          ]
+
+          for item in forbidden:
+              if item in check:
+                  print("ERROR: forbidden line still exists:", item)
                   raise SystemExit(1)
 
-          print("RUNA FC41 target patched:")
+          required = [
+              "USE_IMU_LSM6DXX",
+              "LSM6DXX_SPI_BUS BUS_SPI1",
+              "LSM6DXX_CS_PIN PA4",
+              "IMU_LSM6DXX_ALIGN",
+          ]
+
+          for item in required:
+              if item not in check:
+                  print("ERROR: required line missing:", item)
+                  raise SystemExit(1)
+
+          print("RUNA FC41 target patched OK")
           print("IMU = LSM6DXX")
           print("BUS = SPI1")
           print("CS  = PA4")
           PY
 
-          echo "==== IMU lines ===="
+          echo "==== CHECK target.h IMU lines ===="
           grep -n -E "IMU|LSM6|ICM426|PA4|SPI1" src/main/target/SPEEDYBEEF405WING/target.h || true
 
-      - name: Patch LSM6DXX driver WHO_AM_I
+      - name: Patch LSM6DXX driver WHO_AM_I ROBUST
         run: |
           cd inav
           python3 <<'PY'
           from pathlib import Path
-          import re
 
           path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
           text = path.read_text(encoding="utf-8")
 
-          # Добавляем ID, которые наш диагностический код считает LSM6DXX:
-          # 0x69, 0x6A, 0x6B, 0x6C, 0x6D
-          if "#define LSM6DS3_CHIP_ID 0x69" not in text:
-              print("WARNING: expected LSM6DS3_CHIP_ID not found")
+          func_name = "static bool lsm6dxxDetect"
+          func_start = text.find(func_name)
 
-          if "#define LSM6DSR_CHIP_ID 0x6B" not in text:
-              text = text.replace(
-                  "#define LSM6DS3_CHIP_ID 0x69",
-                  "#define LSM6DS3_CHIP_ID 0x69\n#define LSM6DSR_CHIP_ID 0x6B\n#define LSM6DSOX_CHIP_ID 0x6D"
-              )
+          if func_start == -1:
+              print("ERROR: lsm6dxxDetect function not found")
+              raise SystemExit(1)
 
-          # В официальном коде detection принимает не все ID.
-          # Заменяем switch так, чтобы принимал 0x69/0x6A/0x6B/0x6C/0x6D.
-          old = """        switch (tmp) {
-          case LSM6DSO_CHIP_ID:
-          case LSM6DSL_CHIP_ID:
-              lsm6dID = tmp;
-              // Compatible chip detected
-              return true;
-          default:
-              // Retry detection
-              break;
-          }"""
+          switch_start = text.find("switch", func_start)
 
-          new = """        switch (tmp) {
-          case LSM6DS3_CHIP_ID:
-          case LSM6DSL_CHIP_ID:
-          case LSM6DSR_CHIP_ID:
-          case LSM6DSO_CHIP_ID:
-          case LSM6DSOX_CHIP_ID:
+          if switch_start == -1:
+              print("ERROR: switch not found inside lsm6dxxDetect")
+              print(text[func_start:func_start + 1500])
+              raise SystemExit(1)
+
+          brace_start = text.find("{", switch_start)
+
+          if brace_start == -1:
+              print("ERROR: switch opening brace not found")
+              raise SystemExit(1)
+
+          depth = 0
+          switch_end = -1
+
+          for i in range(brace_start, len(text)):
+              if text[i] == "{":
+                  depth += 1
+              elif text[i] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      switch_end = i + 1
+                      break
+
+          if switch_end == -1:
+              print("ERROR: switch closing brace not found")
+              raise SystemExit(1)
+
+          new_switch = """switch (tmp) {
+          case 0x69:
+          case 0x6A:
+          case 0x6B:
+          case 0x6C:
+          case 0x6D:
               lsm6dID = tmp;
               // RUNA FC41 compatible LSM6DXX chip detected
               return true;
@@ -146,21 +186,22 @@ jobs:
               break;
           }"""
 
-          if old not in text:
-              print("ERROR: original LSM6DXX detect switch not found")
-              raise SystemExit(1)
-
-          text = text.replace(old, new, 1)
+          text = text[:switch_start] + new_switch + text[switch_end:]
           path.write_text(text, encoding="utf-8")
 
-          print("Patched LSM6DXX driver detection:")
-          print("Accepted WHO_AM_I: 0x69, 0x6A, 0x6B, 0x6C, 0x6D")
+          print("Patched LSM6DXX driver detection OK")
+          print("Accepted WHO_AM_I:")
+          print("0x69")
+          print("0x6A")
+          print("0x6B")
+          print("0x6C")
+          print("0x6D")
           PY
 
-          echo "==== LSM6DXX IDs ===="
-          grep -n -E "LSM6DS|CHIP_ID|case LSM6" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+          echo "==== CHECK LSM6DXX DETECT ===="
+          grep -n -A30 -B8 "static bool lsm6dxxDetect" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
-      - name: Patch default acc hardware
+      - name: Patch default acc hardware to LSM6DXX
         run: |
           cd inav
           python3 <<'PY'
@@ -173,14 +214,15 @@ jobs:
           pattern = r"(-\s+name:\s*acc_hardware\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
 
           def repl(m):
-              print("Old acc_hardware default:", m.group(2).strip())
+              old_value = m.group(2).strip()
+              print("Old acc_hardware default:", old_value)
               return m.group(1) + "LSM6DXX"
 
           new_text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
 
           if count == 1:
               path.write_text(new_text, encoding="utf-8")
-              print("acc_hardware default = LSM6DXX")
+              print("acc_hardware default patched to LSM6DXX")
           else:
               print("WARNING: acc_hardware default not found")
           PY
@@ -270,15 +312,18 @@ jobs:
           out_dir.mkdir(parents=True, exist_ok=True)
 
           copied = 0
+
           for file in build_dir.rglob("*"):
               if not file.is_file():
                   continue
+
               if file.suffix.lower() not in {".hex", ".bin", ".elf"}:
                   continue
+
               if target not in file.name:
                   continue
 
-              dst = out_dir / f"RUNA_FC41_LSM6DXX_DRIVERPATCH_{file.name}"
+              dst = out_dir / f"RUNA_FC41_LSM6DXX_ROBUST_{file.name}"
               shutil.copy2(file, dst)
               print("Copied:", dst)
               copied += 1
@@ -286,11 +331,13 @@ jobs:
           if copied == 0:
               print("ERROR: no firmware files found")
               raise SystemExit(1)
+
+          print("Total copied:", copied)
           PY
 
       - name: Upload firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC41-LSM6DXX-DRIVERPATCH
+          name: RUNA-FC41-LSM6DXX-ROBUST
           path: out/${{ env.TARGET }}/*
