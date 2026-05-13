@@ -1,4 +1,4 @@
-name: RUNA LSM6DXX DIAG STM32F405
+name: RUNA LSM6DXX DIAG STM32F405 FIXED
 
 on:
   workflow_dispatch:
@@ -73,6 +73,29 @@ jobs:
           cat > diag/src/startup.c <<'EOF'
           #include <stdint.h>
 
+          void *memcpy(void *dest, const void *src, unsigned int n)
+          {
+              unsigned char *d = (unsigned char *)dest;
+              const unsigned char *s = (const unsigned char *)src;
+
+              while (n--) {
+                  *d++ = *s++;
+              }
+
+              return dest;
+          }
+
+          void *memset(void *s, int c, unsigned int n)
+          {
+              unsigned char *p = (unsigned char *)s;
+
+              while (n--) {
+                  *p++ = (unsigned char)c;
+              }
+
+              return s;
+          }
+
           extern uint32_t _estack;
           extern uint32_t _sidata;
           extern uint32_t _sdata;
@@ -137,7 +160,6 @@ jobs:
           #include <stdbool.h>
 
           #define REG32(addr) (*(volatile uint32_t *)(addr))
-          #define REG16(addr) (*(volatile uint16_t *)(addr))
           #define REG8(addr)  (*(volatile uint8_t  *)(addr))
 
           #define RCC_BASE        0x40023800UL
@@ -153,7 +175,6 @@ jobs:
           #define GPIO_OTYPER(b)  REG32((b) + 0x04)
           #define GPIO_OSPEEDR(b) REG32((b) + 0x08)
           #define GPIO_PUPDR(b)   REG32((b) + 0x0C)
-          #define GPIO_IDR(b)     REG32((b) + 0x10)
           #define GPIO_ODR(b)     REG32((b) + 0x14)
           #define GPIO_BSRR(b)    REG32((b) + 0x18)
           #define GPIO_AFRL(b)    REG32((b) + 0x20)
@@ -162,7 +183,6 @@ jobs:
           #define SPI_CR1         REG32(SPI1_BASE + 0x00)
           #define SPI_CR2         REG32(SPI1_BASE + 0x04)
           #define SPI_SR          REG32(SPI1_BASE + 0x08)
-          #define SPI_DR          REG32(SPI1_BASE + 0x0C)
 
           #define USART_SR        REG32(USART1_BASE + 0x00)
           #define USART_DR        REG32(USART1_BASE + 0x04)
@@ -173,12 +193,12 @@ jobs:
 
           #define BIT(x)          (1UL << (x))
 
-          // Pins from working firmware resource:
-          // PA4 = MPU CS
-          // PA5 = SPI1 SCK
-          // PA6 = SPI1 MISO
-          // PA7 = SPI1 MOSI
-          // PA9 = UART1 TX
+          // Пины из рабочей прошивки:
+          // PA4  = MPU CS
+          // PA5  = SPI1 SCK
+          // PA6  = SPI1 MISO
+          // PA7  = SPI1 MOSI
+          // PA9  = UART1 TX
           // PA10 = UART1 RX
           // PA13 = LED2
           // PA14 = LED1
@@ -240,11 +260,9 @@ jobs:
 
           static void uart1_init(void)
           {
-              // GPIOA + USART1 clock
               RCC_AHB1ENR |= BIT(0);
               RCC_APB2ENR |= BIT(4);
 
-              // PA9 TX, PA10 RX, AF7
               pin_mode_af(GPIOA_BASE, 9, 7);
               pin_mode_af(GPIOA_BASE, 10, 7);
 
@@ -252,7 +270,7 @@ jobs:
               USART_CR2 = 0;
               USART_CR3 = 0;
 
-              // HSI 16 MHz / 115200 ~= 139 = 0x008B
+              // 16 MHz / 115200
               USART_BRR = 0x008B;
 
               // UE + TE + RE
@@ -285,16 +303,13 @@ jobs:
 
           static void spi1_init(uint8_t mode)
           {
-              // GPIOA + SPI1 clock
               RCC_AHB1ENR |= BIT(0);
               RCC_APB2ENR |= BIT(12);
 
-              // SPI1 pins AF5
-              pin_mode_af(GPIOA_BASE, 5, 5); // SCK
-              pin_mode_af(GPIOA_BASE, 6, 5); // MISO
-              pin_mode_af(GPIOA_BASE, 7, 5); // MOSI
+              pin_mode_af(GPIOA_BASE, 5, 5);
+              pin_mode_af(GPIOA_BASE, 6, 5);
+              pin_mode_af(GPIOA_BASE, 7, 5);
 
-              // CS output high
               pin_mode_output(GPIOA_BASE, IMU_CS_PIN);
               gpio_set(GPIOA_BASE, IMU_CS_PIN);
 
@@ -310,10 +325,10 @@ jobs:
               cr1 |= BIT(9);
               cr1 |= BIT(8);
 
-              // Slowest speed first: BR = 111, 16 MHz / 256 = 62.5 kHz
+              // Slow speed: BR = 111, 16 MHz / 256
               cr1 |= BIT(5) | BIT(4) | BIT(3);
 
-              // Mode 0 or mode 3
+              // Mode 3 optional
               if (mode == 3) {
                   cr1 |= BIT(1); // CPOL
                   cr1 |= BIT(0); // CPHA
@@ -347,7 +362,6 @@ jobs:
               gpio_reset(GPIOA_BASE, IMU_CS_PIN);
               delay(100);
 
-              // LSM6DXX SPI read = reg | 0x80
               spi_xfer(reg | 0x80);
               value = spi_xfer(0x00);
 
@@ -359,9 +373,6 @@ jobs:
 
           static bool is_lsm6_whoami(uint8_t v)
           {
-              // Common LSM6 family WHO_AM_I values:
-              // 0x69: LSM6DS3 / LSM6DSL / LSM6DSM family
-              // 0x6A/0x6B/0x6C/0x6D: other LSM6 variants
               return v == 0x69 || v == 0x6A || v == 0x6B || v == 0x6C || v == 0x6D;
           }
 
@@ -417,7 +428,7 @@ jobs:
               gpio_basic_init();
               uart1_init();
 
-              uart_print("\n\nRUNA LSM6DXX DIAG STM32F405\n");
+              uart_print("\n\nRUNA LSM6DXX DIAG STM32F405 FIXED\n");
               uart_print("Pins:\n");
               uart_print("  PA4 = IMU CS\n");
               uart_print("  PA5 = SPI1 SCK\n");
@@ -447,7 +458,7 @@ jobs:
               uart_print("\n\n");
 
               uint8_t good_value = 0x00;
-              uint8_t good_mode = 0;
+              uint8_t good_mode = 255;
 
               if (is_lsm6_whoami(who_mode3)) {
                   good_value = who_mode3;
@@ -457,7 +468,7 @@ jobs:
                   good_mode = 0;
               }
 
-              if (good_mode != 0 || good_value != 0x00) {
+              if (good_mode != 255) {
                   uart_print("RESULT: LSM6DXX FOUND\n");
                   uart_print("MODE: ");
                   uart_putc(good_mode == 3 ? '3' : '0');
@@ -466,7 +477,6 @@ jobs:
                   uart_print("\n\n");
 
                   while (1) {
-                      // Success: LED1 PA14 blinks 3 times
                       blink(LED1_PIN, 3);
                   }
               }
@@ -511,6 +521,8 @@ jobs:
             -mthumb \
             -mfloat-abi=soft \
             -Os \
+            -ffreestanding \
+            -fno-builtin \
             -ffunction-sections \
             -fdata-sections \
             -Wall \
@@ -601,5 +613,5 @@ jobs:
       - name: Upload diagnostic firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-LSM6DXX-DIAG-STM32F405-SPI1-PA4
+          name: RUNA-LSM6DXX-DIAG-STM32F405-SPI1-PA4-FIXED
           path: out/*
