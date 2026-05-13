@@ -1,4 +1,4 @@
-name: RUNA LSM6DXX DIAG STM32F405 FIXED
+name: Build RUNA FC41 INAV 7.1.2 LSM6DXX DRIVER PATCH
 
 on:
   workflow_dispatch:
@@ -8,610 +8,289 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    env:
+      TARGET: SPEEDYBEEF405WING
+
     steps:
-      - name: Install ARM toolchain
+      - name: Install deps
         run: |
           sudo apt-get update -y -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends \
+            git \
+            build-essential \
+            g++ \
+            ruby \
+            cmake \
+            make \
             gcc-arm-none-eabi \
             binutils-arm-none-eabi \
-            make \
-            python3
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-dev \
+            ninja-build \
+            python3 \
+            python3-pip
 
-      - name: Create diagnostic firmware source
+      - name: Clone INAV 7.1.2
         run: |
-          mkdir -p diag/src diag/build
-
-          cat > diag/linker.ld <<'EOF'
-          MEMORY
-          {
-              FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
-              RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
-          }
-
-          _estack = ORIGIN(RAM) + LENGTH(RAM);
-
-          SECTIONS
-          {
-              .isr_vector :
-              {
-                  KEEP(*(.isr_vector))
-              } > FLASH
-
-              .text :
-              {
-                  *(.text*)
-                  *(.rodata*)
-                  KEEP(*(.init))
-                  KEEP(*(.fini))
-              } > FLASH
-
-              .ARM.exidx :
-              {
-                  *(.ARM.exidx*)
-              } > FLASH
-
-              _sidata = LOADADDR(.data);
-
-              .data : AT (_sidata)
-              {
-                  _sdata = .;
-                  *(.data*)
-                  _edata = .;
-              } > RAM
-
-              .bss :
-              {
-                  _sbss = .;
-                  *(.bss*)
-                  *(COMMON)
-                  _ebss = .;
-              } > RAM
-          }
-          EOF
-
-          cat > diag/src/startup.c <<'EOF'
-          #include <stdint.h>
-
-          void *memcpy(void *dest, const void *src, unsigned int n)
-          {
-              unsigned char *d = (unsigned char *)dest;
-              const unsigned char *s = (const unsigned char *)src;
-
-              while (n--) {
-                  *d++ = *s++;
-              }
-
-              return dest;
-          }
-
-          void *memset(void *s, int c, unsigned int n)
-          {
-              unsigned char *p = (unsigned char *)s;
-
-              while (n--) {
-                  *p++ = (unsigned char)c;
-              }
-
-              return s;
-          }
-
-          extern uint32_t _estack;
-          extern uint32_t _sidata;
-          extern uint32_t _sdata;
-          extern uint32_t _edata;
-          extern uint32_t _sbss;
-          extern uint32_t _ebss;
-
-          int main(void);
-
-          void Reset_Handler(void);
-          void Default_Handler(void);
-
-          __attribute__((section(".isr_vector")))
-          const void *vector_table[] = {
-              &_estack,
-              Reset_Handler,
-              Default_Handler,
-              Default_Handler,
-              Default_Handler,
-              Default_Handler,
-              Default_Handler,
-              0,
-              0,
-              0,
-              0,
-              Default_Handler,
-              Default_Handler,
-              0,
-              Default_Handler,
-              Default_Handler,
-          };
-
-          void Reset_Handler(void)
-          {
-              uint32_t *src = &_sidata;
-              uint32_t *dst = &_sdata;
-
-              while (dst < &_edata) {
-                  *dst++ = *src++;
-              }
-
-              dst = &_sbss;
-              while (dst < &_ebss) {
-                  *dst++ = 0;
-              }
-
-              main();
-
-              while (1) {
-              }
-          }
-
-          void Default_Handler(void)
-          {
-              while (1) {
-              }
-          }
-          EOF
-
-          cat > diag/src/main.c <<'EOF'
-          #include <stdint.h>
-          #include <stdbool.h>
-
-          #define REG32(addr) (*(volatile uint32_t *)(addr))
-          #define REG8(addr)  (*(volatile uint8_t  *)(addr))
-
-          #define RCC_BASE        0x40023800UL
-          #define GPIOA_BASE      0x40020000UL
-          #define GPIOC_BASE      0x40020800UL
-          #define SPI1_BASE       0x40013000UL
-          #define USART1_BASE     0x40011000UL
-
-          #define RCC_AHB1ENR     REG32(RCC_BASE + 0x30)
-          #define RCC_APB2ENR     REG32(RCC_BASE + 0x44)
-
-          #define GPIO_MODER(b)   REG32((b) + 0x00)
-          #define GPIO_OTYPER(b)  REG32((b) + 0x04)
-          #define GPIO_OSPEEDR(b) REG32((b) + 0x08)
-          #define GPIO_PUPDR(b)   REG32((b) + 0x0C)
-          #define GPIO_ODR(b)     REG32((b) + 0x14)
-          #define GPIO_BSRR(b)    REG32((b) + 0x18)
-          #define GPIO_AFRL(b)    REG32((b) + 0x20)
-          #define GPIO_AFRH(b)    REG32((b) + 0x24)
-
-          #define SPI_CR1         REG32(SPI1_BASE + 0x00)
-          #define SPI_CR2         REG32(SPI1_BASE + 0x04)
-          #define SPI_SR          REG32(SPI1_BASE + 0x08)
-
-          #define USART_SR        REG32(USART1_BASE + 0x00)
-          #define USART_DR        REG32(USART1_BASE + 0x04)
-          #define USART_BRR       REG32(USART1_BASE + 0x08)
-          #define USART_CR1       REG32(USART1_BASE + 0x0C)
-          #define USART_CR2       REG32(USART1_BASE + 0x10)
-          #define USART_CR3       REG32(USART1_BASE + 0x14)
-
-          #define BIT(x)          (1UL << (x))
-
-          // Пины из рабочей прошивки:
-          // PA4  = MPU CS
-          // PA5  = SPI1 SCK
-          // PA6  = SPI1 MISO
-          // PA7  = SPI1 MOSI
-          // PA9  = UART1 TX
-          // PA10 = UART1 RX
-          // PA13 = LED2
-          // PA14 = LED1
-          // PC15 = BEEPER
-
-          #define IMU_CS_PIN      4
-          #define LED2_PIN        13
-          #define LED1_PIN        14
-          #define BEEPER_PIN      15
-
-          static void delay(volatile uint32_t count)
-          {
-              while (count--) {
-                  __asm volatile ("nop");
-              }
-          }
-
-          static void gpio_set(uint32_t base, uint8_t pin)
-          {
-              GPIO_BSRR(base) = BIT(pin);
-          }
-
-          static void gpio_reset(uint32_t base, uint8_t pin)
-          {
-              GPIO_BSRR(base) = BIT(pin + 16);
-          }
-
-          static void gpio_toggle(uint32_t base, uint8_t pin)
-          {
-              GPIO_ODR(base) ^= BIT(pin);
-          }
-
-          static void pin_mode_output(uint32_t base, uint8_t pin)
-          {
-              GPIO_MODER(base) &= ~(3UL << (pin * 2));
-              GPIO_MODER(base) |=  (1UL << (pin * 2));
-              GPIO_OTYPER(base) &= ~BIT(pin);
-              GPIO_OSPEEDR(base) |= (3UL << (pin * 2));
-              GPIO_PUPDR(base) &= ~(3UL << (pin * 2));
-          }
-
-          static void pin_mode_af(uint32_t base, uint8_t pin, uint8_t af)
-          {
-              GPIO_MODER(base) &= ~(3UL << (pin * 2));
-              GPIO_MODER(base) |=  (2UL << (pin * 2));
-              GPIO_OTYPER(base) &= ~BIT(pin);
-              GPIO_OSPEEDR(base) |= (3UL << (pin * 2));
-              GPIO_PUPDR(base) &= ~(3UL << (pin * 2));
-
-              if (pin < 8) {
-                  GPIO_AFRL(base) &= ~(0xFUL << (pin * 4));
-                  GPIO_AFRL(base) |=  ((uint32_t)af << (pin * 4));
-              } else {
-                  uint8_t p = pin - 8;
-                  GPIO_AFRH(base) &= ~(0xFUL << (p * 4));
-                  GPIO_AFRH(base) |=  ((uint32_t)af << (p * 4));
-              }
-          }
-
-          static void uart1_init(void)
-          {
-              RCC_AHB1ENR |= BIT(0);
-              RCC_APB2ENR |= BIT(4);
-
-              pin_mode_af(GPIOA_BASE, 9, 7);
-              pin_mode_af(GPIOA_BASE, 10, 7);
-
-              USART_CR1 = 0;
-              USART_CR2 = 0;
-              USART_CR3 = 0;
-
-              // 16 MHz / 115200
-              USART_BRR = 0x008B;
-
-              // UE + TE + RE
-              USART_CR1 = BIT(13) | BIT(3) | BIT(2);
-          }
-
-          static void uart_putc(char c)
-          {
-              while (!(USART_SR & BIT(7))) {
-              }
-              USART_DR = (uint8_t)c;
-          }
-
-          static void uart_print(const char *s)
-          {
-              while (*s) {
-                  if (*s == '\n') {
-                      uart_putc('\r');
-                  }
-                  uart_putc(*s++);
-              }
-          }
-
-          static void uart_hex8(uint8_t v)
-          {
-              const char hex[] = "0123456789ABCDEF";
-              uart_putc(hex[(v >> 4) & 0x0F]);
-              uart_putc(hex[v & 0x0F]);
-          }
-
-          static void spi1_init(uint8_t mode)
-          {
-              RCC_AHB1ENR |= BIT(0);
-              RCC_APB2ENR |= BIT(12);
-
-              pin_mode_af(GPIOA_BASE, 5, 5);
-              pin_mode_af(GPIOA_BASE, 6, 5);
-              pin_mode_af(GPIOA_BASE, 7, 5);
-
-              pin_mode_output(GPIOA_BASE, IMU_CS_PIN);
-              gpio_set(GPIOA_BASE, IMU_CS_PIN);
-
-              SPI_CR1 = 0;
-              SPI_CR2 = 0;
-
-              uint32_t cr1 = 0;
-
-              // Master
-              cr1 |= BIT(2);
-
-              // Software NSS
-              cr1 |= BIT(9);
-              cr1 |= BIT(8);
-
-              // Slow speed: BR = 111, 16 MHz / 256
-              cr1 |= BIT(5) | BIT(4) | BIT(3);
-
-              // Mode 3 optional
-              if (mode == 3) {
-                  cr1 |= BIT(1); // CPOL
-                  cr1 |= BIT(0); // CPHA
-              }
-
-              SPI_CR1 = cr1;
-
-              // Enable SPI
-              SPI_CR1 |= BIT(6);
-
-              delay(10000);
-          }
-
-          static uint8_t spi_xfer(uint8_t data)
-          {
-              while (!(SPI_SR & BIT(1))) {
-              }
-
-              REG8(SPI1_BASE + 0x0C) = data;
-
-              while (!(SPI_SR & BIT(0))) {
-              }
-
-              return REG8(SPI1_BASE + 0x0C);
-          }
-
-          static uint8_t imu_read_reg(uint8_t reg)
-          {
-              uint8_t value;
-
-              gpio_reset(GPIOA_BASE, IMU_CS_PIN);
-              delay(100);
-
-              spi_xfer(reg | 0x80);
-              value = spi_xfer(0x00);
-
-              delay(100);
-              gpio_set(GPIOA_BASE, IMU_CS_PIN);
-
-              return value;
-          }
-
-          static bool is_lsm6_whoami(uint8_t v)
-          {
-              return v == 0x69 || v == 0x6A || v == 0x6B || v == 0x6C || v == 0x6D;
-          }
-
-          static void blink(uint8_t led_pin, uint8_t count)
-          {
-              for (uint8_t i = 0; i < count; i++) {
-                  gpio_set(GPIOA_BASE, led_pin);
-                  gpio_toggle(GPIOC_BASE, BEEPER_PIN);
-                  delay(900000);
-
-                  gpio_reset(GPIOA_BASE, led_pin);
-                  gpio_toggle(GPIOC_BASE, BEEPER_PIN);
-                  delay(900000);
-              }
-
-              delay(2500000);
-          }
-
-          static void blink_alternate(uint8_t count)
-          {
-              for (uint8_t i = 0; i < count; i++) {
-                  gpio_set(GPIOA_BASE, LED1_PIN);
-                  gpio_reset(GPIOA_BASE, LED2_PIN);
-                  gpio_toggle(GPIOC_BASE, BEEPER_PIN);
-                  delay(700000);
-
-                  gpio_reset(GPIOA_BASE, LED1_PIN);
-                  gpio_set(GPIOA_BASE, LED2_PIN);
-                  gpio_toggle(GPIOC_BASE, BEEPER_PIN);
-                  delay(700000);
-              }
-
-              gpio_reset(GPIOA_BASE, LED1_PIN);
-              gpio_reset(GPIOA_BASE, LED2_PIN);
-              delay(2500000);
-          }
-
-          static void gpio_basic_init(void)
-          {
-              RCC_AHB1ENR |= BIT(0) | BIT(2);
-
-              pin_mode_output(GPIOA_BASE, LED1_PIN);
-              pin_mode_output(GPIOA_BASE, LED2_PIN);
-              pin_mode_output(GPIOC_BASE, BEEPER_PIN);
-
-              gpio_reset(GPIOA_BASE, LED1_PIN);
-              gpio_reset(GPIOA_BASE, LED2_PIN);
-              gpio_reset(GPIOC_BASE, BEEPER_PIN);
-          }
-
-          int main(void)
-          {
-              gpio_basic_init();
-              uart1_init();
-
-              uart_print("\n\nRUNA LSM6DXX DIAG STM32F405 FIXED\n");
-              uart_print("Pins:\n");
-              uart_print("  PA4 = IMU CS\n");
-              uart_print("  PA5 = SPI1 SCK\n");
-              uart_print("  PA6 = SPI1 MISO\n");
-              uart_print("  PA7 = SPI1 MOSI\n");
-              uart_print("  PA9 = UART1 TX 115200\n\n");
-
-              uint8_t who_mode3 = 0x00;
-              uint8_t who_mode0 = 0x00;
-
-              uart_print("Testing SPI mode 3...\n");
-              spi1_init(3);
-              delay(1000000);
-              who_mode3 = imu_read_reg(0x0F);
-
-              uart_print("WHO_AM_I mode3 = 0x");
-              uart_hex8(who_mode3);
-              uart_print("\n");
-
-              uart_print("Testing SPI mode 0...\n");
-              spi1_init(0);
-              delay(1000000);
-              who_mode0 = imu_read_reg(0x0F);
-
-              uart_print("WHO_AM_I mode0 = 0x");
-              uart_hex8(who_mode0);
-              uart_print("\n\n");
-
-              uint8_t good_value = 0x00;
-              uint8_t good_mode = 255;
-
-              if (is_lsm6_whoami(who_mode3)) {
-                  good_value = who_mode3;
-                  good_mode = 3;
-              } else if (is_lsm6_whoami(who_mode0)) {
-                  good_value = who_mode0;
-                  good_mode = 0;
-              }
-
-              if (good_mode != 255) {
-                  uart_print("RESULT: LSM6DXX FOUND\n");
-                  uart_print("MODE: ");
-                  uart_putc(good_mode == 3 ? '3' : '0');
-                  uart_print("\nWHO_AM_I: 0x");
-                  uart_hex8(good_value);
-                  uart_print("\n\n");
-
-                  while (1) {
-                      blink(LED1_PIN, 3);
-                  }
-              }
-
-              uart_print("RESULT: LSM6DXX NOT FOUND\n");
-
-              if (who_mode3 == 0xFF && who_mode0 == 0xFF) {
-                  uart_print("Both modes returned 0xFF. Possible MISO floating / wrong CS / SPI not connected.\n");
-                  while (1) {
-                      blink(LED2_PIN, 3);
-                  }
-              }
-
-              if (who_mode3 == 0x00 && who_mode0 == 0x00) {
-                  uart_print("Both modes returned 0x00. Possible CS/power/init problem.\n");
-                  while (1) {
-                      blink(LED2_PIN, 2);
-                  }
-              }
-
-              uart_print("Unknown non-zero response. Mode3=0x");
-              uart_hex8(who_mode3);
-              uart_print(" Mode0=0x");
-              uart_hex8(who_mode0);
-              uart_print("\n");
-
-              while (1) {
-                  blink_alternate(4);
-              }
-          }
-          EOF
-
-          cat > diag/Makefile <<'EOF'
-          TARGET = runa_lsm6dxx_diag
-
-          CC = arm-none-eabi-gcc
-          OBJCOPY = arm-none-eabi-objcopy
-          SIZE = arm-none-eabi-size
-
-          CFLAGS = \
-            -mcpu=cortex-m4 \
-            -mthumb \
-            -mfloat-abi=soft \
-            -Os \
-            -ffreestanding \
-            -fno-builtin \
-            -ffunction-sections \
-            -fdata-sections \
-            -Wall \
-            -Wextra \
-            -std=c11 \
-            -nostdlib
-
-          LDFLAGS = \
-            -T linker.ld \
-            -Wl,--gc-sections \
-            -Wl,-Map=build/$(TARGET).map \
-            -nostdlib
-
-          SRCS = src/startup.c src/main.c
-
-          all: build/$(TARGET).elf build/$(TARGET).bin build/$(TARGET).hex
-          	$(SIZE) build/$(TARGET).elf
-
-          build/$(TARGET).elf: $(SRCS) linker.ld
-          	mkdir -p build
-          	$(CC) $(CFLAGS) $(SRCS) $(LDFLAGS) -o $@
-
-          build/$(TARGET).bin: build/$(TARGET).elf
-          	$(OBJCOPY) -O binary $< $@
-
-          build/$(TARGET).hex: build/$(TARGET).elf
-          	$(OBJCOPY) -O ihex $< $@
-
-          clean:
-          	rm -rf build
-          EOF
-
-      - name: Build diagnostic firmware
+          git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
+          cd inav
+          git rev-parse HEAD
+
+      - name: Patch FC41 target to LSM6DXX
         run: |
-          cd diag
-          make clean
-          make
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
 
-      - name: Collect files
+          path = Path("src/main/target/SPEEDYBEEF405WING/target.h")
+          text = path.read_text(encoding="utf-8")
+
+          remove_patterns = [
+              r'//\s*ICM42605/ICM42688P\s*',
+              r'#define\s+USE_IMU_ICM42605\s*',
+              r'#define\s+IMU_ICM42605_ALIGN\s+\S+\s*',
+              r'#define\s+ICM42605_CS_PIN\s+\S+\s*',
+              r'#define\s+ICM42605_SPI_BUS\s+\S+\s*',
+              r'#define\s+USE_IMU_ICM42688P\s*',
+              r'#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*',
+              r'#define\s+ICM42688P_CS_PIN\s+\S+\s*',
+              r'#define\s+ICM42688P_SPI_BUS\s+\S+\s*',
+              r'#define\s+USE_IMU_LSM6DXX\s*',
+              r'#define\s+LSM6DXX_SPI_BUS\s+\S+\s*',
+              r'#define\s+LSM6DXX_CS_PIN\s+\S+\s*',
+              r'#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*',
+          ]
+
+          for p in remove_patterns:
+              text = re.sub(p, "", text, flags=re.M)
+
+          text += """
+
+          /*
+           * RUNA FC 4.1 IMU
+           * Diagnostic result: LSM6DXX FOUND
+           * PA4 = MPU CS
+           * PA5 = SPI1 SCK
+           * PA6 = SPI1 MISO
+           * PA7 = SPI1 MOSI
+           */
+          #define USE_IMU_LSM6DXX
+          #define LSM6DXX_SPI_BUS BUS_SPI1
+          #define LSM6DXX_CS_PIN PA4
+          #define IMU_LSM6DXX_ALIGN CW0_DEG
+          """
+
+          path.write_text(text, encoding="utf-8")
+
+          check = path.read_text(encoding="utf-8")
+          for bad in ["USE_IMU_ICM42605", "ICM42605_CS_PIN", "USE_IMU_ICM42688P", "ICM42688P_CS_PIN"]:
+              if bad in check:
+                  print("ERROR still exists:", bad)
+                  raise SystemExit(1)
+
+          print("RUNA FC41 target patched:")
+          print("IMU = LSM6DXX")
+          print("BUS = SPI1")
+          print("CS  = PA4")
+          PY
+
+          echo "==== IMU lines ===="
+          grep -n -E "IMU|LSM6|ICM426|PA4|SPI1" src/main/target/SPEEDYBEEF405WING/target.h || true
+
+      - name: Patch LSM6DXX driver WHO_AM_I
         run: |
-          mkdir -p out
-          cp diag/build/runa_lsm6dxx_diag.bin out/RUNA_LSM6DXX_DIAG_STM32F405_SPI1_PA4.bin
-          cp diag/build/runa_lsm6dxx_diag.hex out/RUNA_LSM6DXX_DIAG_STM32F405_SPI1_PA4.hex
-          cp diag/build/runa_lsm6dxx_diag.elf out/RUNA_LSM6DXX_DIAG_STM32F405_SPI1_PA4.elf
-          cp diag/build/runa_lsm6dxx_diag.map out/RUNA_LSM6DXX_DIAG_STM32F405_SPI1_PA4.map
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
 
-          cat > out/README_RUNA_LSM6DXX_DIAG.txt <<'EOF'
-          RUNA LSM6DXX DIAGNOSTIC FIRMWARE
+          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
+          text = path.read_text(encoding="utf-8")
 
-          WARNING:
-          This is NOT flight firmware.
-          Do NOT fly with this firmware.
-          Use only on bench.
+          # Добавляем ID, которые наш диагностический код считает LSM6DXX:
+          # 0x69, 0x6A, 0x6B, 0x6C, 0x6D
+          if "#define LSM6DS3_CHIP_ID 0x69" not in text:
+              print("WARNING: expected LSM6DS3_CHIP_ID not found")
 
-          Target MCU:
-          STM32F405
+          if "#define LSM6DSR_CHIP_ID 0x6B" not in text:
+              text = text.replace(
+                  "#define LSM6DS3_CHIP_ID 0x69",
+                  "#define LSM6DS3_CHIP_ID 0x69\n#define LSM6DSR_CHIP_ID 0x6B\n#define LSM6DSOX_CHIP_ID 0x6D"
+              )
 
-          Tested pins:
-          PA4 = IMU CS
-          PA5 = SPI1 SCK
-          PA6 = SPI1 MISO
-          PA7 = SPI1 MOSI
+          # В официальном коде detection принимает не все ID.
+          # Заменяем switch так, чтобы принимал 0x69/0x6A/0x6B/0x6C/0x6D.
+          old = """        switch (tmp) {
+          case LSM6DSO_CHIP_ID:
+          case LSM6DSL_CHIP_ID:
+              lsm6dID = tmp;
+              // Compatible chip detected
+              return true;
+          default:
+              // Retry detection
+              break;
+          }"""
 
-          UART output:
-          UART1 TX = PA9
-          UART1 RX = PA10
-          Baudrate = 115200 8N1
+          new = """        switch (tmp) {
+          case LSM6DS3_CHIP_ID:
+          case LSM6DSL_CHIP_ID:
+          case LSM6DSR_CHIP_ID:
+          case LSM6DSO_CHIP_ID:
+          case LSM6DSOX_CHIP_ID:
+              lsm6dID = tmp;
+              // RUNA FC41 compatible LSM6DXX chip detected
+              return true;
+          default:
+              // Retry detection
+              break;
+          }"""
 
-          LED / beep codes:
-          LED1 PA14 blinks 3 times:
-            LSM6DXX found.
+          if old not in text:
+              print("ERROR: original LSM6DXX detect switch not found")
+              raise SystemExit(1)
 
-          LED2 PA13 blinks 2 times:
-            WHO_AM_I returned 0x00.
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
 
-          LED2 PA13 blinks 3 times:
-            WHO_AM_I returned 0xFF.
+          print("Patched LSM6DXX driver detection:")
+          print("Accepted WHO_AM_I: 0x69, 0x6A, 0x6B, 0x6C, 0x6D")
+          PY
 
-          LED1/LED2 alternate:
-            Unknown non-zero response.
+          echo "==== LSM6DXX IDs ===="
+          grep -n -E "LSM6DS|CHIP_ID|case LSM6" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
-          After testing, flash back your working INAV firmware.
-          EOF
+      - name: Patch default acc hardware
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
 
-          echo "Files:"
-          find out -type f -print
+          path = Path("src/main/fc/settings.yaml")
+          text = path.read_text(encoding="utf-8")
 
-      - name: Upload diagnostic firmware
+          pattern = r"(-\s+name:\s*acc_hardware\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
+
+          def repl(m):
+              print("Old acc_hardware default:", m.group(2).strip())
+              return m.group(1) + "LSM6DXX"
+
+          new_text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
+
+          if count == 1:
+              path.write_text(new_text, encoding="utf-8")
+              print("acc_hardware default = LSM6DXX")
+          else:
+              print("WARNING: acc_hardware default not found")
+          PY
+
+      - name: Patch RUNA name
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/fc/fc_msp.c")
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
+
+          replacement = '''sbufWriteU8(dst, strlen(targetName) + 5);
+                  sbufWriteData(dst, targetName, strlen(targetName));
+                  sbufWriteData(dst, "+RUNA", 5);'''
+
+          new_text, count = re.subn(pattern, replacement, text, count=1)
+
+          if count == 1:
+              path.write_text(new_text, encoding="utf-8")
+              print("Patched target name: +RUNA")
+          else:
+              print("WARNING: targetName MSP patch not found")
+          PY
+
+      - name: Patch startup text
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/io/osd.c")
+          text = path.read_text(encoding="utf-8")
+
+          old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
+          new = 'tfp_sprintf(string_buffer, "version RUNA 1.0");'
+
+          if old in text:
+              text = text.replace(old, new, 1)
+              text = text.replace(
+                  'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
+                  'uint8_t xPos = OSD_CENTER_S(string_buffer);',
+                  1
+              )
+              path.write_text(text, encoding="utf-8")
+              print("Startup text patched: version RUNA 1.0")
+          else:
+              print("WARNING: startup text line not found")
+          PY
+
+      - name: Configure CMake
+        run: |
+          cd inav
+          mkdir -p build
+          cd build
+          cmake ..
+
+      - name: Build SPEEDYBEEF405WING
+        run: |
+          cd inav/build
+          make clean_${TARGET} || true
+          make ${TARGET} -j2 VERBOSE=1
+
+      - name: Find firmware
+        if: always()
+        run: |
+          echo "===== BUILT FILES ====="
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+
+      - name: Collect firmware
+        if: success()
+        run: |
+          mkdir -p out/${TARGET}
+
+          python3 <<'PY'
+          from pathlib import Path
+          import shutil
+          import os
+
+          target = os.environ["TARGET"]
+          build_dir = Path("inav/build")
+          out_dir = Path("out") / target
+          out_dir.mkdir(parents=True, exist_ok=True)
+
+          copied = 0
+          for file in build_dir.rglob("*"):
+              if not file.is_file():
+                  continue
+              if file.suffix.lower() not in {".hex", ".bin", ".elf"}:
+                  continue
+              if target not in file.name:
+                  continue
+
+              dst = out_dir / f"RUNA_FC41_LSM6DXX_DRIVERPATCH_{file.name}"
+              shutil.copy2(file, dst)
+              print("Copied:", dst)
+              copied += 1
+
+          if copied == 0:
+              print("ERROR: no firmware files found")
+              raise SystemExit(1)
+          PY
+
+      - name: Upload firmware
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-LSM6DXX-DIAG-STM32F405-SPI1-PA4-FIXED
-          path: out/*
+          name: RUNA-FC41-LSM6DXX-DRIVERPATCH
+          path: out/${{ env.TARGET }}/*
