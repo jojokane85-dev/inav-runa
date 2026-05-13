@@ -1,4 +1,4 @@
-name: Build RUNA FC41 FINAL INAV 7.1.2
+name: Build RUNA FC41 FINAL INAV 7.1.2 CW270
 
 on:
   workflow_dispatch:
@@ -37,7 +37,7 @@ jobs:
           echo "Current commit:"
           git rev-parse HEAD
 
-      - name: Patch FC41 target to LSM6DXX
+      - name: Patch FC41 target to LSM6DXX CW270
         run: |
           cd inav
           python3 <<'PY'
@@ -81,11 +81,14 @@ jobs:
            * PA5 = SPI1 SCK
            * PA6 = SPI1 MISO
            * PA7 = SPI1 MOSI
+           *
+           * Orientation fix:
+           * IMU_LSM6DXX_ALIGN = CW270_DEG
            */
           #define USE_IMU_LSM6DXX
           #define LSM6DXX_SPI_BUS BUS_SPI1
           #define LSM6DXX_CS_PIN PA4
-          #define IMU_LSM6DXX_ALIGN CW0_DEG
+          #define IMU_LSM6DXX_ALIGN CW270_DEG
           """
 
           path.write_text(text, encoding="utf-8")
@@ -110,7 +113,7 @@ jobs:
               "USE_IMU_LSM6DXX",
               "LSM6DXX_SPI_BUS BUS_SPI1",
               "LSM6DXX_CS_PIN PA4",
-              "IMU_LSM6DXX_ALIGN",
+              "IMU_LSM6DXX_ALIGN CW270_DEG",
           ]
 
           for item in required:
@@ -122,10 +125,11 @@ jobs:
           print("IMU = LSM6DXX")
           print("BUS = SPI1")
           print("CS  = PA4")
+          print("ALIGN = CW270_DEG")
           PY
 
           echo "==== CHECK target.h IMU lines ===="
-          grep -n -E "IMU|LSM6|ICM426|PA4|SPI1" src/main/target/SPEEDYBEEF405WING/target.h || true
+          grep -n -E "IMU|LSM6|ICM426|PA4|SPI1|CW270" src/main/target/SPEEDYBEEF405WING/target.h || true
 
       - name: Patch LSM6DXX driver WHO_AM_I ROBUST
         run: |
@@ -580,7 +584,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              dst = out_dir / f"RUNA_FC41_FINAL_LSM6DXX_3G3_SHUTTER_{file.name}"
+              dst = out_dir / f"RUNA_FC41_FINAL_CW270_LSM6DXX_3G3_SHUTTER_{file.name}"
               shutil.copy2(file, dst)
               print("Copied:", dst)
               copied += 1
@@ -596,5 +600,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC41-FINAL-LSM6DXX-3G3-SHUTTER
+          name: RUNA-FC41-FINAL-CW270-LSM6DXX-3G3-SHUTTER
           path: out/${{ env.TARGET }}/*
