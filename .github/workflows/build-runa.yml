@@ -1,4 +1,4 @@
-name: Build RUNA FC41 FINAL INAV 7.1.2 CW90
+name: Build RUNA CADDXF405 WING FC45 INAV 7.1.2
 
 on:
   workflow_dispatch:
@@ -9,7 +9,8 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      TARGET: SPEEDYBEEF405WING
+      BASE_TARGET: SPEEDYBEEF405WING
+      TARGET: CADDXF405_WING
 
     steps:
       - name: Install deps
@@ -37,14 +38,26 @@ jobs:
           echo "Current commit:"
           git rev-parse HEAD
 
-      - name: Patch FC41 target to LSM6DXX CW90
+      - name: Create CADDXF405_WING target from SPEEDYBEEF405WING
+        run: |
+          cd inav
+
+          rm -rf src/main/target/${TARGET}
+          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
+
+          echo "Created target:"
+          ls -la src/main/target/${TARGET}
+
+      - name: Patch CADDXF405_WING target to LSM6DXX
         run: |
           cd inav
           python3 <<'PY'
           from pathlib import Path
           import re
+          import os
 
-          path = Path("src/main/target/SPEEDYBEEF405WING/target.h")
+          target = os.environ["TARGET"]
+          path = Path(f"src/main/target/{target}/target.h")
           text = path.read_text(encoding="utf-8")
 
           remove_patterns = [
@@ -71,24 +84,25 @@ jobs:
           text += """
 
           /*
-           * RUNA FC 4.1 IMU
+           * RUNA CADDXF405_WING FC 4.5
            *
-           * Confirmed by diagnostic firmware:
-           * LED1 blinked 3 times = LSM6DXX FOUND
+           * From working original status:
+           * INAV/CADDXF405_WING 7.1.2
+           * GYRO=LSM6DXX
+           * ACC=LSM6DXX
+           * BARO=SPL06
+           * MAG=HMC5883
            *
-           * Working pins:
+           * Working pins from resource:
            * PA4 = MPU CS
            * PA5 = SPI1 SCK
            * PA6 = SPI1 MISO
            * PA7 = SPI1 MOSI
-           *
-           * Orientation fix:
-           * IMU_LSM6DXX_ALIGN = CW90_DEG
            */
           #define USE_IMU_LSM6DXX
           #define LSM6DXX_SPI_BUS BUS_SPI1
           #define LSM6DXX_CS_PIN PA4
-          #define IMU_LSM6DXX_ALIGN CW90_DEG
+          #define IMU_LSM6DXX_ALIGN CW0_DEG
           """
 
           path.write_text(text, encoding="utf-8")
@@ -113,7 +127,7 @@ jobs:
               "USE_IMU_LSM6DXX",
               "LSM6DXX_SPI_BUS BUS_SPI1",
               "LSM6DXX_CS_PIN PA4",
-              "IMU_LSM6DXX_ALIGN CW90_DEG",
+              "IMU_LSM6DXX_ALIGN CW0_DEG",
           ]
 
           for item in required:
@@ -121,15 +135,15 @@ jobs:
                   print("ERROR: required line missing:", item)
                   raise SystemExit(1)
 
-          print("RUNA FC41 target patched OK")
+          print("RUNA CADDXF405_WING target patched OK")
           print("IMU = LSM6DXX")
           print("BUS = SPI1")
           print("CS  = PA4")
-          print("ALIGN = CW90_DEG")
+          print("ALIGN = CW0_DEG")
           PY
 
-          echo "==== CHECK target.h IMU lines ===="
-          grep -n -E "IMU|LSM6|ICM426|PA4|SPI1|CW90" src/main/target/SPEEDYBEEF405WING/target.h || true
+          echo "==== CHECK CADDXF405_WING target.h IMU lines ===="
+          grep -n -E "IMU|LSM6|ICM426|PA4|SPI1|CW0" src/main/target/${TARGET}/target.h || true
 
       - name: Patch LSM6DXX driver WHO_AM_I ROBUST
         run: |
@@ -183,7 +197,7 @@ jobs:
           case 0x6C:
           case 0x6D:
               lsm6dID = tmp;
-              // RUNA FC41 compatible LSM6DXX chip detected
+              // RUNA CADDXF405_WING compatible LSM6DXX chip detected
               return true;
           default:
               // Retry detection
@@ -197,10 +211,7 @@ jobs:
           print("Accepted WHO_AM_I: 0x69, 0x6A, 0x6B, 0x6C, 0x6D")
           PY
 
-          echo "==== CHECK LSM6DXX DETECT ===="
-          grep -n -A30 -B8 "static bool lsm6dxxDetect" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
-
-      - name: Patch default acc hardware to LSM6DXX
+      - name: Patch default acc hardware and ADC defaults
         run: |
           cd inav
           python3 <<'PY'
@@ -210,23 +221,28 @@ jobs:
           path = Path("src/main/fc/settings.yaml")
           text = path.read_text(encoding="utf-8")
 
-          pattern = r"(-\s+name:\s*acc_hardware\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
+          def patch_setting(text, name, value):
+              pattern = rf"(-\s+name:\s*{re.escape(name)}\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
+              def repl(m):
+                  print(f"{name}: {m.group(2).strip()} -> {value}")
+                  return m.group(1) + str(value)
+              new_text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
+              if count != 1:
+                  print(f"WARNING: {name} default not found")
+              return new_text
 
-          def repl(m):
-              old_value = m.group(2).strip()
-              print("Old acc_hardware default:", old_value)
-              return m.group(1) + "LSM6DXX"
+          text = patch_setting(text, "acc_hardware", "LSM6DXX")
 
-          new_text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
+          # По рабочему CADDXF405_WING:
+          # RSSI ADC3, CURRENT ADC2, AIRSPEED ADC4
+          text = patch_setting(text, "rssi_adc_channel", "3")
+          text = patch_setting(text, "current_adc_channel", "2")
+          text = patch_setting(text, "airspeed_adc_channel", "4")
 
-          if count == 1:
-              path.write_text(new_text, encoding="utf-8")
-              print("acc_hardware default patched to LSM6DXX")
-          else:
-              print("WARNING: acc_hardware default not found")
+          path.write_text(text, encoding="utf-8")
           PY
 
-      - name: Patch RUNA name
+      - name: Patch RUNA name in Configurator
         run: |
           cd inav
           python3 <<'PY'
@@ -238,15 +254,15 @@ jobs:
 
           pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
 
-          replacement = '''sbufWriteU8(dst, strlen(targetName) + 5);
-                  sbufWriteData(dst, targetName, strlen(targetName));
-                  sbufWriteData(dst, "+RUNA", 5);'''
+          replacement = '''const char *runaTargetName = "CADDXF405_WING+RUNA";
+                  sbufWriteU8(dst, strlen(runaTargetName));
+                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));'''
 
           new_text, count = re.subn(pattern, replacement, text, count=1)
 
           if count == 1:
               path.write_text(new_text, encoding="utf-8")
-              print("Patched target name: +RUNA")
+              print("Patched Configurator target name: CADDXF405_WING+RUNA")
           else:
               print("WARNING: targetName MSP patch not found")
           PY
@@ -274,173 +290,6 @@ jobs:
               print("Startup text patched: version RUNA 1.0")
           else:
               print("WARNING: startup text line not found")
-          PY
-
-      - name: Patch RUNA 3.3GHz VTX table
-        run: |
-          cd inav
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          def sub_required(text, pattern, replacement, name, flags=0):
-              new_text, count = re.subn(pattern, replacement, text, count=1, flags=flags)
-              if count != 1:
-                  print(f"ERROR: could not replace: {name}")
-                  print("PATTERN:", pattern)
-                  raise SystemExit(1)
-              print("Patched:", name)
-              return new_text
-
-          path = Path("src/main/io/vtx_string.c")
-          text = path.read_text(encoding="utf-8")
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
-              "#define VTX_STRING_1G3_BAND_COUNT 6",
-              "VTX_STRING_1G3_BAND_COUNT"
-          )
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
-              "#define VTX_STRING_1G3_POWER_COUNT 5",
-              "VTX_STRING_1G3_POWER_COUNT"
-          )
-
-          text = sub_required(
-              text,
-              r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
-              """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
-              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
-              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
-              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
-              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
-              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
-              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
-          };""",
-              "vtx1G3frequencyTable",
-              flags=re.S
-          )
-
-          text = sub_required(
-              text,
-              r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
-              "-", "A", "B", "C", "D", "E", "F",
-          };""",
-              "vtx1G3BandNames",
-              flags=re.S
-          )
-
-          text = sub_required(
-              text,
-              r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
-              'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
-              "vtx1G3BandLetter",
-              flags=re.S
-          )
-
-          text = sub_required(
-              text,
-              r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
-              "---", "25", "200", "400", "800", "MAX"
-          };""",
-              "vtx1G3DefaultPowerNames",
-              flags=re.S
-          )
-
-          path.write_text(text, encoding="utf-8")
-
-          path = Path("src/main/io/vtx_string.h")
-          text = path.read_text(encoding="utf-8")
-
-          text = sub_required(
-              text,
-              r"extern\s+const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*\d+\s*\]\s*\[\s*8\s*\]\s*;",
-              "extern const uint16_t vtx1G3frequencyTable[6][8];",
-              "vtx1G3frequencyTable extern"
-          )
-
-          text = text.replace(
-              "extern const char vtx51G3BandLetter[];",
-              "extern const char vtx1G3BandLetter[];"
-          )
-
-          path.write_text(text, encoding="utf-8")
-
-          path = Path("src/main/io/vtx_tramp.h")
-          text = path.read_text(encoding="utf-8")
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_TRAMP_1G3_BAND_COUNT\s+\d+",
-              "#define VTX_TRAMP_1G3_BAND_COUNT 6",
-              "VTX_TRAMP_1G3_BAND_COUNT"
-          )
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_TRAMP_1G3_MAX_POWER_COUNT\s+\d+",
-              "#define VTX_TRAMP_1G3_MAX_POWER_COUNT 5",
-              "VTX_TRAMP_1G3_MAX_POWER_COUNT"
-          )
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ\s+\d+",
-              "#define VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ 3000",
-              "VTX_TRAMP_1G3_MIN_FREQUENCY_MHZ"
-          )
-
-          text = sub_required(
-              text,
-              r"#define\s+VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ\s+\d+",
-              "#define VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ 3599",
-              "VTX_TRAMP_1G3_MAX_FREQUENCY_MHZ"
-          )
-
-          path.write_text(text, encoding="utf-8")
-
-          path = Path("src/main/io/vtx_tramp.c")
-          text = path.read_text(encoding="utf-8")
-
-          text = sub_required(
-              text,
-              r"const\s+uint16_t\s+trampPowerTable_1G3_800\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\]\s*=\s*\{.*?\};",
-              "const uint16_t trampPowerTable_1G3_800[VTX_TRAMP_1G3_MAX_POWER_COUNT] = { 25, 200, 400, 800, 800 };",
-              "trampPowerTable_1G3_800",
-              flags=re.S
-          )
-
-          text = sub_required(
-              text,
-              r"const\s+char\s*\*\s+const\s+trampPowerNames_1G3_800\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              'const char * const trampPowerNames_1G3_800[VTX_TRAMP_1G3_MAX_POWER_COUNT + 1] = { "---", "25 ", "200", "400", "800", "800" };',
-              "trampPowerNames_1G3_800",
-              flags=re.S
-          )
-
-          text = sub_required(
-              text,
-              r"const\s+uint16_t\s+trampPowerTable_1G3_2000\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\]\s*=\s*\{.*?\};",
-              "const uint16_t trampPowerTable_1G3_2000[VTX_TRAMP_1G3_MAX_POWER_COUNT] = { 25, 200, 400, 800, 2000 };",
-              "trampPowerTable_1G3_2000",
-              flags=re.S
-          )
-
-          text = sub_required(
-              text,
-              r"const\s+char\s*\*\s+const\s+trampPowerNames_1G3_2000\s*\[\s*VTX_TRAMP_1G3_MAX_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              'const char * const trampPowerNames_1G3_2000[VTX_TRAMP_1G3_MAX_POWER_COUNT + 1] = { "---", "25 ", "200", "400", "800", "2000" };',
-              "trampPowerNames_1G3_2000",
-              flags=re.S
-          )
-
-          path.write_text(text, encoding="utf-8")
-          print("RUNA 3.3GHz VTX table patched")
           PY
 
       - name: Patch RUNA OSD shutter
@@ -545,7 +394,18 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build SPEEDYBEEF405WING
+      - name: Check target exists
+        run: |
+          cd inav/build
+          echo "Checking target: ${TARGET}"
+          make help | grep "${TARGET}" || {
+            echo "TARGET NOT FOUND: ${TARGET}"
+            echo "Trying to list CADDX / SPEEDY targets:"
+            make help | grep -Ei "CADDX|CADDY|SPEEDY|F405WING" || true
+            exit 1
+          }
+
+      - name: Build CADDXF405_WING
         run: |
           cd inav/build
           make clean_${TARGET} || true
@@ -584,7 +444,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              dst = out_dir / f"RUNA_FC41_FINAL_CW90_LSM6DXX_3G3_SHUTTER_{file.name}"
+              dst = out_dir / f"RUNA_FC45_CADDXF405_WING_LSM6DXX_{file.name}"
               shutil.copy2(file, dst)
               print("Copied:", dst)
               copied += 1
@@ -600,5 +460,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC41-FINAL-CW90-LSM6DXX-3G3-SHUTTER
+          name: RUNA-FC45-CADDXF405-WING-LSM6DXX
           path: out/${{ env.TARGET }}/*
