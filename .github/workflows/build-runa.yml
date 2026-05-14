@@ -1,4 +1,4 @@
-name: Build RUNA CADDXF405 WING FC45 FORCE LSM6DXX
+name: Build RUNA FC45 Orientation Pack
 
 on:
   workflow_dispatch:
@@ -10,7 +10,6 @@ jobs:
 
     env:
       BASE_TARGET: SPEEDYBEEF405WING
-      TARGET: CADDXF405_WING
 
     steps:
       - name: Install deps
@@ -38,33 +37,28 @@ jobs:
           echo "Current commit:"
           git rev-parse HEAD
 
-      - name: Create CADDXF405_WING target from SPEEDYBEEF405WING
-        run: |
-          cd inav
-
-          rm -rf src/main/target/${TARGET}
-          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
-
-          echo "Fix CMakeLists target name..."
-          sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
-
-          echo "Created target:"
-          ls -la src/main/target/${TARGET}
-
-          echo "CMakeLists:"
-          cat src/main/target/${TARGET}/CMakeLists.txt
-
-      - name: Patch CADDXF405_WING target to LSM6DXX
+      - name: Create 8 RUNA FC45 orientation targets
         run: |
           cd inav
           python3 <<'PY'
           from pathlib import Path
+          import shutil
           import re
           import os
 
-          target = os.environ["TARGET"]
-          path = Path(f"src/main/target/{target}/target.h")
-          text = path.read_text(encoding="utf-8")
+          base_target = os.environ["BASE_TARGET"]
+          base_dir = Path(f"src/main/target/{base_target}")
+
+          variants = {
+              "R45CW0": "CW0_DEG",
+              "R45CW90": "CW90_DEG",
+              "R45CW180": "CW180_DEG",
+              "R45CW270": "CW270_DEG",
+              "R45CW0F": "CW0_DEG_FLIP",
+              "R45CW90F": "CW90_DEG_FLIP",
+              "R45CW180F": "CW180_DEG_FLIP",
+              "R45CW270F": "CW270_DEG_FLIP",
+          }
 
           remove_patterns = [
               r'//\s*ICM42605/ICM42688P\s*',
@@ -84,72 +78,60 @@ jobs:
               r'#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*',
           ]
 
-          for pattern in remove_patterns:
-              text = re.sub(pattern, "", text, flags=re.M)
+          for target, align in variants.items():
+              dst_dir = Path(f"src/main/target/{target}")
 
-          text += """
+              if dst_dir.exists():
+                  shutil.rmtree(dst_dir)
+
+              shutil.copytree(base_dir, dst_dir)
+
+              cmake = dst_dir / "CMakeLists.txt"
+              cmake_text = cmake.read_text(encoding="utf-8")
+              cmake_text = cmake_text.replace(base_target, target)
+              cmake.write_text(cmake_text, encoding="utf-8")
+
+              target_h = dst_dir / "target.h"
+              text = target_h.read_text(encoding="utf-8")
+
+              for pattern in remove_patterns:
+                  text = re.sub(pattern, "", text, flags=re.M)
+
+              text += f"""
 
           /*
-           * RUNA CADDXF405_WING FC 4.5
+           * RUNA CADDXF405_WING FC 4.5 ORIENTATION TEST
            *
            * Original working status:
-           * INAV/CADDXF405_WING 7.1.2
            * GYRO=LSM6DXX
            * ACC=LSM6DXX
            * BARO=SPL06
            * MAG=HMC5883
            *
-           * Pins from resource:
+           * Pins:
            * PA4 = MPU CS
            * PA5 = SPI1 SCK
            * PA6 = SPI1 MISO
            * PA7 = SPI1 MOSI
+           *
+           * TEST ALIGN:
+           * {align}
            */
           #define USE_IMU_LSM6DXX
           #define LSM6DXX_SPI_BUS BUS_SPI1
           #define LSM6DXX_CS_PIN PA4
-          #define IMU_LSM6DXX_ALIGN CW0_DEG
+          #define IMU_LSM6DXX_ALIGN {align}
           """
 
-          path.write_text(text, encoding="utf-8")
+              target_h.write_text(text, encoding="utf-8")
 
-          check = path.read_text(encoding="utf-8")
+              print(f"Created {target} with {align}")
 
-          forbidden = [
-              "USE_IMU_ICM42605",
-              "ICM42605_CS_PIN",
-              "ICM42605_SPI_BUS",
-              "USE_IMU_ICM42688P",
-              "ICM42688P_CS_PIN",
-              "ICM42688P_SPI_BUS",
-          ]
-
-          for item in forbidden:
-              if item in check:
-                  print("ERROR: forbidden line still exists:", item)
-                  raise SystemExit(1)
-
-          required = [
-              "USE_IMU_LSM6DXX",
-              "LSM6DXX_SPI_BUS BUS_SPI1",
-              "LSM6DXX_CS_PIN PA4",
-              "IMU_LSM6DXX_ALIGN CW0_DEG",
-          ]
-
-          for item in required:
-              if item not in check:
-                  print("ERROR: required line missing:", item)
-                  raise SystemExit(1)
-
-          print("RUNA CADDXF405_WING target patched OK")
-          print("IMU = LSM6DXX")
-          print("BUS = SPI1")
-          print("CS  = PA4")
-          print("ALIGN = CW0_DEG")
+          print("All RUNA FC45 orientation targets created.")
           PY
 
-          echo "==== CHECK CADDXF405_WING target.h IMU lines ===="
-          grep -n -E "IMU|LSM6|ICM426|PA4|SPI1|CW0" src/main/target/${TARGET}/target.h || true
+          echo "==== Created targets ===="
+          ls src/main/target | grep R45 || true
 
       - name: Patch LSM6DXX driver FORCE DETECT
         run: |
@@ -173,14 +155,14 @@ jobs:
               busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);
 
               /*
-               * RUNA CADDXF405_WING FC4.5 FORCE DETECT
+               * RUNA FC45 FORCE DETECT
                *
-               * Original firmware detects this board as:
+               * Original CADDXF405_WING firmware detects this board as:
                * GYRO=LSM6DXX
                * ACC=LSM6DXX
                *
-               * If WHO_AM_I is one of known LSM6 values, keep it.
-               * If not, still force LSM6DS3 ID so INAV continues init.
+               * If WHO_AM_I is known, use it.
+               * If not, force LSM6DS3 ID so INAV continues init.
                */
               if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
                   lsm6dID = tmp;
@@ -195,7 +177,6 @@ jobs:
 
           if count != 1:
               print("ERROR: lsm6dxxDetect function not replaced")
-              print("Searching for function...")
               start = text.find("static bool lsm6dxxDetect")
               print("Start:", start)
               if start != -1:
@@ -235,8 +216,7 @@ jobs:
 
           text = patch_setting(text, "acc_hardware", "LSM6DXX")
 
-          # Как в рабочем CADDXF405_WING:
-          # RSSI ADC3, CURRENT ADC2, AIRSPEED ADC4
+          # Как в рабочей оригинальной CADDXF405_WING:
           text = patch_setting(text, "rssi_adc_channel", "3")
           text = patch_setting(text, "current_adc_channel", "2")
           text = patch_setting(text, "airspeed_adc_channel", "4")
@@ -292,101 +272,6 @@ jobs:
               print("Startup text patched: version RUNA 1.0")
           else:
               print("WARNING: startup text line not found")
-          PY
-
-      - name: Patch RUNA 3.3GHz VTX table
-        run: |
-          cd inav
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          def sub_required(text, pattern, replacement, name, flags=0):
-              new_text, count = re.subn(pattern, replacement, text, count=1, flags=flags)
-              if count != 1:
-                  print(f"WARNING: could not replace: {name}")
-                  return text
-              print("Patched:", name)
-              return new_text
-
-          path = Path("src/main/io/vtx_string.c")
-          if path.exists():
-              text = path.read_text(encoding="utf-8")
-
-              text = sub_required(
-                  text,
-                  r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
-                  "#define VTX_STRING_1G3_BAND_COUNT 6",
-                  "VTX_STRING_1G3_BAND_COUNT"
-              )
-
-              text = sub_required(
-                  text,
-                  r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
-                  "#define VTX_STRING_1G3_POWER_COUNT 5",
-                  "VTX_STRING_1G3_POWER_COUNT"
-              )
-
-              text = sub_required(
-                  text,
-                  r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
-                  """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
-              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
-              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
-              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
-              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
-              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
-              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
-          };""",
-                  "vtx1G3frequencyTable",
-                  flags=re.S
-              )
-
-              text = sub_required(
-                  text,
-                  r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-                  """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
-              "-", "A", "B", "C", "D", "E", "F",
-          };""",
-                  "vtx1G3BandNames",
-                  flags=re.S
-              )
-
-              text = sub_required(
-                  text,
-                  r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
-                  'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
-                  "vtx1G3BandLetter",
-                  flags=re.S
-              )
-
-              text = sub_required(
-                  text,
-                  r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-                  """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
-              "---", "25", "200", "400", "800", "MAX"
-          };""",
-                  "vtx1G3DefaultPowerNames",
-                  flags=re.S
-              )
-
-              path.write_text(text, encoding="utf-8")
-
-          path = Path("src/main/io/vtx_string.h")
-          if path.exists():
-              text = path.read_text(encoding="utf-8")
-              text = re.sub(
-                  r"extern\s+const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*\d+\s*\]\s*\[\s*8\s*\]\s*;",
-                  "extern const uint16_t vtx1G3frequencyTable[6][8];",
-                  text
-              )
-              text = text.replace(
-                  "extern const char vtx51G3BandLetter[];",
-                  "extern const char vtx1G3BandLetter[];"
-              )
-              path.write_text(text, encoding="utf-8")
-
-          print("RUNA 3.3GHz VTX table patch step completed")
           PY
 
       - name: Patch RUNA OSD shutter
@@ -491,22 +376,19 @@ jobs:
           cd build
           cmake ..
 
-      - name: Check target exists
+      - name: Build all orientation firmwares
         run: |
           cd inav/build
-          echo "Checking target: ${TARGET}"
-          make help | grep "${TARGET}" || {
-            echo "TARGET NOT FOUND: ${TARGET}"
-            echo "Trying to list CADDX / SPEEDY targets:"
-            make help | grep -Ei "CADDX|CADDY|SPEEDY|F405WING" || true
-            exit 1
-          }
 
-      - name: Build CADDXF405_WING
-        run: |
-          cd inav/build
-          make clean_${TARGET} || true
-          make ${TARGET} -j2 VERBOSE=1
+          TARGETS="R45CW0 R45CW90 R45CW180 R45CW270 R45CW0F R45CW90F R45CW180F R45CW270F"
+
+          for T in $TARGETS; do
+            echo "=============================="
+            echo "BUILDING $T"
+            echo "=============================="
+            make clean_${T} || true
+            make ${T} -j2 VERBOSE=1
+          done
 
       - name: Find firmware
         if: always()
@@ -517,18 +399,25 @@ jobs:
       - name: Collect firmware
         if: success()
         run: |
-          mkdir -p out/${TARGET}
+          mkdir -p out
 
           python3 <<'PY'
           from pathlib import Path
           import shutil
-          import os
 
-          target = os.environ["TARGET"]
+          targets = {
+              "R45CW0": "CW0_DEG",
+              "R45CW90": "CW90_DEG",
+              "R45CW180": "CW180_DEG",
+              "R45CW270": "CW270_DEG",
+              "R45CW0F": "CW0_DEG_FLIP",
+              "R45CW90F": "CW90_DEG_FLIP",
+              "R45CW180F": "CW180_DEG_FLIP",
+              "R45CW270F": "CW270_DEG_FLIP",
+          }
+
           build_dir = Path("inav/build")
-          out_dir = Path("out") / target
-          out_dir.mkdir(parents=True, exist_ok=True)
-
+          out_dir = Path("out")
           copied = 0
 
           for file in build_dir.rglob("*"):
@@ -538,24 +427,70 @@ jobs:
               if file.suffix.lower() not in {".hex", ".bin", ".elf"}:
                   continue
 
-              if target not in file.name:
-                  continue
-
-              dst = out_dir / f"RUNA_FC45_CADDXF405_WING_FORCE_LSM6DXX_{file.name}"
-              shutil.copy2(file, dst)
-              print("Copied:", dst)
-              copied += 1
+              for target, align in targets.items():
+                  if target in file.name:
+                      dst = out_dir / f"RUNA_FC45_{align}_{file.name}"
+                      shutil.copy2(file, dst)
+                      print("Copied:", dst)
+                      copied += 1
+                      break
 
           if copied == 0:
               print("ERROR: no firmware files found")
               raise SystemExit(1)
 
+          readme = out_dir / "README_RUNA_FC45_ORIENTATION_TEST.txt"
+          readme.write_text("""RUNA FC45 CADDXF405_WING ORIENTATION TEST PACK
+
+WARNING:
+Do not fly with these test firmwares until model movement is correct.
+Remove propeller before testing.
+
+Flash one HEX at a time and check Setup tab.
+
+Correct movement:
+nose up          -> model nose up
+nose down        -> model nose down
+left wing down   -> model rolls left
+right wing down  -> model rolls right
+
+After each flash:
+1) CLI:
+   defaults
+   save
+
+2) Then, if accelerometer calibration does not work:
+   set acczero_x = 0
+   set acczero_y = -2
+   set acczero_z = 20
+   set accgain_x = 4091
+   set accgain_y = 4093
+   set accgain_z = 4094
+   save
+
+3) Do not use align_board_yaw/roll/pitch while testing these files:
+   set align_board_roll = 0
+   set align_board_pitch = 0
+   set align_board_yaw = 0
+   save
+
+Test order recommendation:
+1. CW0_DEG
+2. CW90_DEG
+3. CW180_DEG
+4. CW270_DEG
+5. CW0_DEG_FLIP
+6. CW90_DEG_FLIP
+7. CW180_DEG_FLIP
+8. CW270_DEG_FLIP
+""", encoding="utf-8")
+
           print("Total copied:", copied)
           PY
 
-      - name: Upload firmware
+      - name: Upload firmware pack
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-CADDXF405-WING-FORCE-LSM6DXX
-          path: out/${{ env.TARGET }}/*
+          name: RUNA-FC45-CADDXF405-WING-ORIENTATION-PACK
+          path: out/*
