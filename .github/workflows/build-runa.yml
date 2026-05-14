@@ -1,4 +1,4 @@
-name: Build RUNA FC45 Orientation Pack
+name: Build RUNA FC45 Orientation Pack FIXED
 
 on:
   workflow_dispatch:
@@ -40,6 +40,7 @@ jobs:
       - name: Create 8 RUNA FC45 orientation targets
         run: |
           cd inav
+
           python3 <<'PY'
           from pathlib import Path
           import shutil
@@ -136,6 +137,7 @@ jobs:
       - name: Patch LSM6DXX driver FORCE DETECT
         run: |
           cd inav
+
           python3 <<'PY'
           from pathlib import Path
           import re
@@ -193,6 +195,7 @@ jobs:
       - name: Patch default acc hardware and ADC defaults
         run: |
           cd inav
+
           python3 <<'PY'
           from pathlib import Path
           import re
@@ -227,6 +230,7 @@ jobs:
       - name: Patch RUNA name in Configurator
         run: |
           cd inav
+
           python3 <<'PY'
           from pathlib import Path
           import re
@@ -252,6 +256,7 @@ jobs:
       - name: Patch startup text
         run: |
           cd inav
+
           python3 <<'PY'
           from pathlib import Path
 
@@ -277,6 +282,7 @@ jobs:
       - name: Patch RUNA OSD shutter
         run: |
           cd inav
+
           python3 <<'PY'
           from pathlib import Path
           import re
@@ -439,51 +445,55 @@ jobs:
               print("ERROR: no firmware files found")
               raise SystemExit(1)
 
+          readme_text = "\n".join([
+              "RUNA FC45 CADDXF405_WING ORIENTATION TEST PACK",
+              "",
+              "WARNING:",
+              "Do not fly with these test firmwares until model movement is correct.",
+              "Remove propeller before testing.",
+              "",
+              "Flash one HEX at a time and check Setup tab.",
+              "",
+              "Correct movement:",
+              "nose up          -> model nose up",
+              "nose down        -> model nose down",
+              "left wing down   -> model rolls left",
+              "right wing down  -> model rolls right",
+              "",
+              "After each flash:",
+              "1) CLI:",
+              "   defaults",
+              "   save",
+              "",
+              "2) Then reset board alignment:",
+              "   set align_board_roll = 0",
+              "   set align_board_pitch = 0",
+              "   set align_board_yaw = 0",
+              "   save",
+              "",
+              "3) If accelerometer calibration does not work:",
+              "   set acczero_x = 0",
+              "   set acczero_y = -2",
+              "   set acczero_z = 20",
+              "   set accgain_x = 4091",
+              "   set accgain_y = 4093",
+              "   set accgain_z = 4094",
+              "   save",
+              "",
+              "Test order recommendation:",
+              "1. CW0_DEG",
+              "2. CW90_DEG",
+              "3. CW180_DEG",
+              "4. CW270_DEG",
+              "5. CW0_DEG_FLIP",
+              "6. CW90_DEG_FLIP",
+              "7. CW180_DEG_FLIP",
+              "8. CW270_DEG_FLIP",
+              "",
+          ])
+
           readme = out_dir / "README_RUNA_FC45_ORIENTATION_TEST.txt"
-          readme.write_text("""RUNA FC45 CADDXF405_WING ORIENTATION TEST PACK
-
-WARNING:
-Do not fly with these test firmwares until model movement is correct.
-Remove propeller before testing.
-
-Flash one HEX at a time and check Setup tab.
-
-Correct movement:
-nose up          -> model nose up
-nose down        -> model nose down
-left wing down   -> model rolls left
-right wing down  -> model rolls right
-
-After each flash:
-1) CLI:
-   defaults
-   save
-
-2) Then, if accelerometer calibration does not work:
-   set acczero_x = 0
-   set acczero_y = -2
-   set acczero_z = 20
-   set accgain_x = 4091
-   set accgain_y = 4093
-   set accgain_z = 4094
-   save
-
-3) Do not use align_board_yaw/roll/pitch while testing these files:
-   set align_board_roll = 0
-   set align_board_pitch = 0
-   set align_board_yaw = 0
-   save
-
-Test order recommendation:
-1. CW0_DEG
-2. CW90_DEG
-3. CW180_DEG
-4. CW270_DEG
-5. CW0_DEG_FLIP
-6. CW90_DEG_FLIP
-7. CW180_DEG_FLIP
-8. CW270_DEG_FLIP
-""", encoding="utf-8")
+          readme.write_text(readme_text, encoding="utf-8")
 
           print("Total copied:", copied)
           PY
@@ -492,5 +502,5 @@ Test order recommendation:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-CADDXF405-WING-ORIENTATION-PACK
+          name: RUNA-FC45-CADDXF405-WING-ORIENTATION-PACK-FIXED
           path: out/*
