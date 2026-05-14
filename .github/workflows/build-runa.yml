@@ -1,4 +1,4 @@
-name: Build RUNA CADDXF405 WING FC45 INAV 7.1.2 FIXED
+name: Build RUNA CADDXF405 WING FC45 FORCE LSM6DXX
 
 on:
   workflow_dispatch:
@@ -99,7 +99,7 @@ jobs:
            * BARO=SPL06
            * MAG=HMC5883
            *
-           * Pins:
+           * Pins from resource:
            * PA4 = MPU CS
            * PA5 = SPI1 SCK
            * PA6 = SPI1 MISO
@@ -151,74 +151,63 @@ jobs:
           echo "==== CHECK CADDXF405_WING target.h IMU lines ===="
           grep -n -E "IMU|LSM6|ICM426|PA4|SPI1|CW0" src/main/target/${TARGET}/target.h || true
 
-      - name: Patch LSM6DXX driver WHO_AM_I ROBUST
+      - name: Patch LSM6DXX driver FORCE DETECT
         run: |
           cd inav
           python3 <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
           text = path.read_text(encoding="utf-8")
 
-          func_name = "static bool lsm6dxxDetect"
-          func_start = text.find(func_name)
+          pattern = r"static bool lsm6dxxDetect\(busDevice_t \* dev\)\s*\{.*?\n\}"
 
-          if func_start == -1:
-              print("ERROR: lsm6dxxDetect function not found")
-              raise SystemExit(1)
+          replacement = r'''static bool lsm6dxxDetect(busDevice_t * dev)
+          {
+              uint8_t tmp = 0;
 
-          switch_start = text.find("switch", func_start)
+              busSetSpeed(dev, BUS_SPEED_INITIALIZATION);
+              delay(150);
 
-          if switch_start == -1:
-              print("ERROR: switch not found inside lsm6dxxDetect")
-              print(text[func_start:func_start + 1500])
-              raise SystemExit(1)
+              busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);
 
-          brace_start = text.find("{", switch_start)
+              /*
+               * RUNA CADDXF405_WING FC4.5 FORCE DETECT
+               *
+               * Original firmware detects this board as:
+               * GYRO=LSM6DXX
+               * ACC=LSM6DXX
+               *
+               * If WHO_AM_I is one of known LSM6 values, keep it.
+               * If not, still force LSM6DS3 ID so INAV continues init.
+               */
+              if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
+                  lsm6dID = tmp;
+              } else {
+                  lsm6dID = LSM6DS3_CHIP_ID;
+              }
 
-          if brace_start == -1:
-              print("ERROR: switch opening brace not found")
-              raise SystemExit(1)
-
-          depth = 0
-          switch_end = -1
-
-          for i in range(brace_start, len(text)):
-              if text[i] == "{":
-                  depth += 1
-              elif text[i] == "}":
-                  depth -= 1
-                  if depth == 0:
-                      switch_end = i + 1
-                      break
-
-          if switch_end == -1:
-              print("ERROR: switch closing brace not found")
-              raise SystemExit(1)
-
-          new_switch = """switch (tmp) {
-          case 0x69:
-          case 0x6A:
-          case 0x6B:
-          case 0x6C:
-          case 0x6D:
-              lsm6dID = tmp;
-              // RUNA CADDXF405_WING compatible LSM6DXX chip detected
               return true;
-          default:
-              // Retry detection
-              break;
-          }"""
+          }'''
 
-          text = text[:switch_start] + new_switch + text[switch_end:]
-          path.write_text(text, encoding="utf-8")
+          new_text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
 
-          print("Patched LSM6DXX driver detection OK")
-          print("Accepted WHO_AM_I: 0x69, 0x6A, 0x6B, 0x6C, 0x6D")
+          if count != 1:
+              print("ERROR: lsm6dxxDetect function not replaced")
+              print("Searching for function...")
+              start = text.find("static bool lsm6dxxDetect")
+              print("Start:", start)
+              if start != -1:
+                  print(text[start:start + 1200])
+              raise SystemExit(1)
+
+          path.write_text(new_text, encoding="utf-8")
+          print("RUNA FORCE LSM6DXX detect patched")
           PY
 
-          echo "==== CHECK LSM6DXX DETECT ===="
-          grep -n -A30 -B8 "static bool lsm6dxxDetect" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+          echo "==== CHECK FORCE DETECT ===="
+          grep -n -A35 -B5 "static bool lsm6dxxDetect" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
       - name: Patch default acc hardware and ADC defaults
         run: |
@@ -303,6 +292,101 @@ jobs:
               print("Startup text patched: version RUNA 1.0")
           else:
               print("WARNING: startup text line not found")
+          PY
+
+      - name: Patch RUNA 3.3GHz VTX table
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def sub_required(text, pattern, replacement, name, flags=0):
+              new_text, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if count != 1:
+                  print(f"WARNING: could not replace: {name}")
+                  return text
+              print("Patched:", name)
+              return new_text
+
+          path = Path("src/main/io/vtx_string.c")
+          if path.exists():
+              text = path.read_text(encoding="utf-8")
+
+              text = sub_required(
+                  text,
+                  r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
+                  "#define VTX_STRING_1G3_BAND_COUNT 6",
+                  "VTX_STRING_1G3_BAND_COUNT"
+              )
+
+              text = sub_required(
+                  text,
+                  r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
+                  "#define VTX_STRING_1G3_POWER_COUNT 5",
+                  "VTX_STRING_1G3_POWER_COUNT"
+              )
+
+              text = sub_required(
+                  text,
+                  r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
+                  """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
+              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
+              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
+              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
+              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
+              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
+              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
+          };""",
+                  "vtx1G3frequencyTable",
+                  flags=re.S
+              )
+
+              text = sub_required(
+                  text,
+                  r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+                  """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
+              "-", "A", "B", "C", "D", "E", "F",
+          };""",
+                  "vtx1G3BandNames",
+                  flags=re.S
+              )
+
+              text = sub_required(
+                  text,
+                  r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
+                  'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
+                  "vtx1G3BandLetter",
+                  flags=re.S
+              )
+
+              text = sub_required(
+                  text,
+                  r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+                  """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
+              "---", "25", "200", "400", "800", "MAX"
+          };""",
+                  "vtx1G3DefaultPowerNames",
+                  flags=re.S
+              )
+
+              path.write_text(text, encoding="utf-8")
+
+          path = Path("src/main/io/vtx_string.h")
+          if path.exists():
+              text = path.read_text(encoding="utf-8")
+              text = re.sub(
+                  r"extern\s+const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*\d+\s*\]\s*\[\s*8\s*\]\s*;",
+                  "extern const uint16_t vtx1G3frequencyTable[6][8];",
+                  text
+              )
+              text = text.replace(
+                  "extern const char vtx51G3BandLetter[];",
+                  "extern const char vtx1G3BandLetter[];"
+              )
+              path.write_text(text, encoding="utf-8")
+
+          print("RUNA 3.3GHz VTX table patch step completed")
           PY
 
       - name: Patch RUNA OSD shutter
@@ -457,7 +541,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              dst = out_dir / f"RUNA_FC45_CADDXF405_WING_LSM6DXX_FIXED_{file.name}"
+              dst = out_dir / f"RUNA_FC45_CADDXF405_WING_FORCE_LSM6DXX_{file.name}"
               shutil.copy2(file, dst)
               print("Copied:", dst)
               copied += 1
@@ -473,5 +557,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-CADDXF405-WING-LSM6DXX-FIXED
+          name: RUNA-FC45-CADDXF405-WING-FORCE-LSM6DXX
           path: out/${{ env.TARGET }}/*
