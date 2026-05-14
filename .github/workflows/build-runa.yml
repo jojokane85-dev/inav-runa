@@ -1,4 +1,4 @@
-name: Build RUNA CADDXF405 WING FC45 INAV 7.1.2
+name: Build RUNA CADDXF405 WING FC45 INAV 7.1.2 FIXED
 
 on:
   workflow_dispatch:
@@ -45,8 +45,14 @@ jobs:
           rm -rf src/main/target/${TARGET}
           cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
 
+          echo "Fix CMakeLists target name..."
+          sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
+
           echo "Created target:"
           ls -la src/main/target/${TARGET}
+
+          echo "CMakeLists:"
+          cat src/main/target/${TARGET}/CMakeLists.txt
 
       - name: Patch CADDXF405_WING target to LSM6DXX
         run: |
@@ -86,14 +92,14 @@ jobs:
           /*
            * RUNA CADDXF405_WING FC 4.5
            *
-           * From working original status:
+           * Original working status:
            * INAV/CADDXF405_WING 7.1.2
            * GYRO=LSM6DXX
            * ACC=LSM6DXX
            * BARO=SPL06
            * MAG=HMC5883
            *
-           * Working pins from resource:
+           * Pins:
            * PA4 = MPU CS
            * PA5 = SPI1 SCK
            * PA6 = SPI1 MISO
@@ -211,6 +217,9 @@ jobs:
           print("Accepted WHO_AM_I: 0x69, 0x6A, 0x6B, 0x6C, 0x6D")
           PY
 
+          echo "==== CHECK LSM6DXX DETECT ===="
+          grep -n -A30 -B8 "static bool lsm6dxxDetect" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+
       - name: Patch default acc hardware and ADC defaults
         run: |
           cd inav
@@ -223,17 +232,21 @@ jobs:
 
           def patch_setting(text, name, value):
               pattern = rf"(-\s+name:\s*{re.escape(name)}\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
+
               def repl(m):
                   print(f"{name}: {m.group(2).strip()} -> {value}")
                   return m.group(1) + str(value)
+
               new_text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
+
               if count != 1:
                   print(f"WARNING: {name} default not found")
+
               return new_text
 
           text = patch_setting(text, "acc_hardware", "LSM6DXX")
 
-          # По рабочему CADDXF405_WING:
+          # Как в рабочем CADDXF405_WING:
           # RSSI ADC3, CURRENT ADC2, AIRSPEED ADC4
           text = patch_setting(text, "rssi_adc_channel", "3")
           text = patch_setting(text, "current_adc_channel", "2")
@@ -444,7 +457,7 @@ jobs:
               if target not in file.name:
                   continue
 
-              dst = out_dir / f"RUNA_FC45_CADDXF405_WING_LSM6DXX_{file.name}"
+              dst = out_dir / f"RUNA_FC45_CADDXF405_WING_LSM6DXX_FIXED_{file.name}"
               shutil.copy2(file, dst)
               print("Copied:", dst)
               copied += 1
@@ -460,5 +473,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-CADDXF405-WING-LSM6DXX
+          name: RUNA-FC45-CADDXF405-WING-LSM6DXX-FIXED
           path: out/${{ env.TARGET }}/*
