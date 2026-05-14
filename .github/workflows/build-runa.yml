@@ -1,4 +1,4 @@
-  name: Build RUNA FC45 Orientation Pack FULL FIX
+name: Build RUNA FC45 Orientation Matrix
 
 on:
   workflow_dispatch:
@@ -8,8 +8,31 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - align: CW0_DEG
+            artifact: RUNA-FC45-CW0-DEG
+          - align: CW90_DEG
+            artifact: RUNA-FC45-CW90-DEG
+          - align: CW180_DEG
+            artifact: RUNA-FC45-CW180-DEG
+          - align: CW270_DEG
+            artifact: RUNA-FC45-CW270-DEG
+          - align: CW0_DEG_FLIP
+            artifact: RUNA-FC45-CW0-DEG-FLIP
+          - align: CW90_DEG_FLIP
+            artifact: RUNA-FC45-CW90-DEG-FLIP
+          - align: CW180_DEG_FLIP
+            artifact: RUNA-FC45-CW180-DEG-FLIP
+          - align: CW270_DEG_FLIP
+            artifact: RUNA-FC45-CW270-DEG-FLIP
+
     env:
       BASE_TARGET: SPEEDYBEEF405WING
+      TARGET: CADDXF405_WING
+      IMU_ALIGN: ${{ matrix.align }}
 
     steps:
       - name: Install deps
@@ -37,29 +60,32 @@ jobs:
           echo "Current commit:"
           git rev-parse HEAD
 
-      - name: Create 8 RUNA FC45 orientation targets
+      - name: Create CADDXF405_WING target
+        run: |
+          cd inav
+
+          rm -rf src/main/target/${TARGET}
+          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
+
+          sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
+
+          echo "Created target ${TARGET}"
+          cat src/main/target/${TARGET}/CMakeLists.txt
+
+      - name: Patch target to LSM6DXX with selected orientation
         run: |
           cd inav
 
           python3 <<'PY'
           from pathlib import Path
-          import shutil
-          import re
           import os
+          import re
 
-          base_target = os.environ["BASE_TARGET"]
-          base_dir = Path(f"src/main/target/{base_target}")
+          target = os.environ["TARGET"]
+          align = os.environ["IMU_ALIGN"]
 
-          variants = {
-              "R45CW0": "CW0_DEG",
-              "R45CW90": "CW90_DEG",
-              "R45CW180": "CW180_DEG",
-              "R45CW270": "CW270_DEG",
-              "R45CW0F": "CW0_DEG_FLIP",
-              "R45CW90F": "CW90_DEG_FLIP",
-              "R45CW180F": "CW180_DEG_FLIP",
-              "R45CW270F": "CW270_DEG_FLIP",
-          }
+          path = Path(f"src/main/target/{target}/target.h")
+          text = path.read_text(encoding="utf-8")
 
           remove_patterns = [
               r'//\s*ICM42605/ICM42688P\s*',
@@ -79,44 +105,25 @@ jobs:
               r'#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*',
           ]
 
-          for target, align in variants.items():
-              dst_dir = Path(f"src/main/target/{target}")
+          for pattern in remove_patterns:
+              text = re.sub(pattern, "", text, flags=re.M)
 
-              if dst_dir.exists():
-                  shutil.rmtree(dst_dir)
-
-              shutil.copytree(base_dir, dst_dir)
-
-              cmake = dst_dir / "CMakeLists.txt"
-              cmake_text = cmake.read_text(encoding="utf-8")
-              cmake_text = cmake_text.replace(base_target, target)
-              cmake.write_text(cmake_text, encoding="utf-8")
-
-              target_h = dst_dir / "target.h"
-              text = target_h.read_text(encoding="utf-8")
-
-              for pattern in remove_patterns:
-                  text = re.sub(pattern, "", text, flags=re.M)
-
-              text += f"""
+          text += f"""
 
           /*
-           * RUNA CADDXF405_WING FC 4.5 ORIENTATION TEST
+           * RUNA CADDXF405_WING FC 4.5
            *
-           * Original working status:
-           * GYRO=LSM6DXX
-           * ACC=LSM6DXX
-           * BARO=SPL06
-           * MAG=HMC5883
+           * GYRO = LSM6DXX
+           * ACC  = LSM6DXX
+           * BARO = SPL06
+           * MAG  = HMC5883
            *
-           * Pins:
            * PA4 = MPU CS
            * PA5 = SPI1 SCK
            * PA6 = SPI1 MISO
            * PA7 = SPI1 MOSI
            *
-           * TEST ALIGN:
-           * {align}
+           * TEST ALIGN = {align}
            */
           #define USE_IMU_LSM6DXX
           #define LSM6DXX_SPI_BUS BUS_SPI1
@@ -124,15 +131,27 @@ jobs:
           #define IMU_LSM6DXX_ALIGN {align}
           """
 
-              target_h.write_text(text, encoding="utf-8")
+          path.write_text(text, encoding="utf-8")
 
-              print(f"Created {target} with {align}")
+          check = path.read_text(encoding="utf-8")
 
-          print("All RUNA FC45 orientation targets created.")
+          required = [
+              "USE_IMU_LSM6DXX",
+              "LSM6DXX_SPI_BUS BUS_SPI1",
+              "LSM6DXX_CS_PIN PA4",
+              f"IMU_LSM6DXX_ALIGN {align}",
+          ]
+
+          for item in required:
+              if item not in check:
+                  print("ERROR: missing", item)
+                  raise SystemExit(1)
+
+          print("Target patched OK")
+          print("ALIGN =", align)
           PY
 
-          echo "==== Created targets ===="
-          ls src/main/target | grep R45 || true
+          grep -n -E "LSM6|IMU|PA4|SPI1|CW" src/main/target/${TARGET}/target.h || true
 
       - name: Patch LSM6DXX driver FORCE DETECT
         run: |
@@ -140,12 +159,38 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
-          import re
 
           path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
           text = path.read_text(encoding="utf-8")
 
-          pattern = r"static bool lsm6dxxDetect\(busDevice_t \* dev\)\s*\{.*?\n\}"
+          func_name = "static bool lsm6dxxDetect"
+          func_start = text.find(func_name)
+
+          if func_start == -1:
+              print("ERROR: lsm6dxxDetect function not found")
+              raise SystemExit(1)
+
+          brace_start = text.find("{", func_start)
+
+          if brace_start == -1:
+              print("ERROR: function opening brace not found")
+              raise SystemExit(1)
+
+          depth = 0
+          func_end = -1
+
+          for i in range(brace_start, len(text)):
+              if text[i] == "{":
+                  depth += 1
+              elif text[i] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      func_end = i + 1
+                      break
+
+          if func_end == -1:
+              print("ERROR: function closing brace not found")
+              raise SystemExit(1)
 
           replacement = r'''static bool lsm6dxxDetect(busDevice_t * dev)
           {
@@ -158,13 +203,9 @@ jobs:
 
               /*
                * RUNA FC45 FORCE DETECT
-               *
-               * Original CADDXF405_WING firmware detects this board as:
+               * Original CADDXF405_WING firmware detects:
                * GYRO=LSM6DXX
                * ACC=LSM6DXX
-               *
-               * If WHO_AM_I is known, use it.
-               * If not, force LSM6DS3 ID so INAV continues init.
                */
               if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
                   lsm6dID = tmp;
@@ -175,24 +216,15 @@ jobs:
               return true;
           }'''
 
-          new_text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+          text = text[:func_start] + replacement + text[func_end:]
+          path.write_text(text, encoding="utf-8")
 
-          if count != 1:
-              print("ERROR: lsm6dxxDetect function not replaced")
-              start = text.find("static bool lsm6dxxDetect")
-              print("Start:", start)
-              if start != -1:
-                  print(text[start:start + 1200])
-              raise SystemExit(1)
-
-          path.write_text(new_text, encoding="utf-8")
-          print("RUNA FORCE LSM6DXX detect patched")
+          print("LSM6DXX FORCE DETECT patched OK")
           PY
 
-          echo "==== CHECK FORCE DETECT ===="
           grep -n -A35 -B5 "static bool lsm6dxxDetect" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
-      - name: Patch default acc hardware and ADC defaults
+      - name: Patch defaults
         run: |
           cd inav
 
@@ -213,16 +245,11 @@ jobs:
               new_text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
 
               if count != 1:
-                  print(f"WARNING: {name} default not found")
+                  print(f"WARNING: {name} not found")
 
               return new_text
 
           text = patch_setting(text, "acc_hardware", "LSM6DXX")
-
-          # Как в рабочей оригинальной CADDXF405_WING:
-          # RSSI = ADC3
-          # CURRENT = ADC2
-          # AIRSPEED = ADC4
           text = patch_setting(text, "rssi_adc_channel", "3")
           text = patch_setting(text, "current_adc_channel", "2")
           text = patch_setting(text, "airspeed_adc_channel", "4")
@@ -230,7 +257,7 @@ jobs:
           path.write_text(text, encoding="utf-8")
           PY
 
-      - name: Patch RUNA name in Configurator
+      - name: Patch RUNA name
         run: |
           cd inav
 
@@ -251,9 +278,9 @@ jobs:
 
           if count == 1:
               path.write_text(new_text, encoding="utf-8")
-              print("Patched Configurator target name: CADDXF405_WING+RUNA")
+              print("RUNA name patched")
           else:
-              print("WARNING: targetName MSP patch not found")
+              print("WARNING: RUNA name patch not found")
           PY
 
       - name: Patch startup text
@@ -277,7 +304,7 @@ jobs:
                   1
               )
               path.write_text(text, encoding="utf-8")
-              print("Startup text patched: version RUNA 1.0")
+              print("Startup text patched")
           else:
               print("WARNING: startup text line not found")
           PY
@@ -385,111 +412,72 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build and collect all orientation firmwares
+      - name: Build firmware
+        run: |
+          cd inav/build
+
+          make clean_${TARGET} || true
+          make ${TARGET} -j2 VERBOSE=1
+
+      - name: Collect firmware
+        if: success()
         run: |
           mkdir -p out
 
           cd inav/build
 
-          declare -A ALIGN
-          ALIGN[R45CW0]="CW0_DEG"
-          ALIGN[R45CW90]="CW90_DEG"
-          ALIGN[R45CW180]="CW180_DEG"
-          ALIGN[R45CW270]="CW270_DEG"
-          ALIGN[R45CW0F]="CW0_DEG_FLIP"
-          ALIGN[R45CW90F]="CW90_DEG_FLIP"
-          ALIGN[R45CW180F]="CW180_DEG_FLIP"
-          ALIGN[R45CW270F]="CW270_DEG_FLIP"
+          FOUND=0
 
-          TARGETS="R45CW0 R45CW90 R45CW180 R45CW270 R45CW0F R45CW90F R45CW180F R45CW270F"
+          while IFS= read -r f; do
+            base="$(basename "$f")"
+            dst="../../out/RUNA_FC45_${IMU_ALIGN}_${base}"
+            cp "$f" "$dst"
+            echo "Copied: $dst"
+            FOUND=$((FOUND + 1))
+          done < <(find . -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
 
-          for T in $TARGETS; do
-            echo "=============================="
-            echo "BUILDING $T / ${ALIGN[$T]}"
-            echo "=============================="
+          if [ "$FOUND" -eq 0 ]; then
+            echo "ERROR: no firmware files found"
+            find . -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+            exit 1
+          fi
 
-            make clean_${T} || true
-            make ${T} -j2 VERBOSE=1
+          cat > ../../out/README_${IMU_ALIGN}.txt <<EOF
+          RUNA FC45 CADDXF405_WING
+          IMU ALIGN: ${IMU_ALIGN}
 
-            echo "Collecting files for $T..."
+          After flashing:
+          1) defaults
+          2) save
 
-            FOUND=0
+          Then:
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 0
+          save
 
-            while IFS= read -r f; do
-              base="$(basename "$f")"
-              dst="../../out/RUNA_FC45_${ALIGN[$T]}_${base}"
-              cp "$f" "$dst"
-              echo "Copied: $dst"
-              FOUND=$((FOUND + 1))
-            done < <(find . -type f \( -name "*${T}*.hex" -o -name "*${T}*.bin" -o -name "*${T}*.elf" \))
+          If ACC flag appears:
+          set acczero_x = 0
+          set acczero_y = -2
+          set acczero_z = 20
+          set accgain_x = 4091
+          set accgain_y = 4093
+          set accgain_z = 4094
+          save
 
-            if [ "$FOUND" -eq 0 ]; then
-              echo "ERROR: no firmware files found for $T"
-              exit 1
-            fi
-          done
+          Correct movement:
+          nose up -> model nose up
+          nose down -> model nose down
+          left wing down -> model rolls left
+          right wing down -> model rolls right
+          EOF
 
-          python3 <<'PY'
-          from pathlib import Path
-
-          readme_text = "\n".join([
-              "RUNA FC45 CADDXF405_WING ORIENTATION TEST PACK",
-              "",
-              "WARNING:",
-              "Do not fly with these test firmwares until model movement is correct.",
-              "Remove propeller before testing.",
-              "",
-              "Flash one HEX at a time and check Setup tab.",
-              "",
-              "Correct movement:",
-              "nose up          -> model nose up",
-              "nose down        -> model nose down",
-              "left wing down   -> model rolls left",
-              "right wing down  -> model rolls right",
-              "",
-              "After each flash:",
-              "1) CLI:",
-              "   defaults",
-              "   save",
-              "",
-              "2) Then reset board alignment:",
-              "   set align_board_roll = 0",
-              "   set align_board_pitch = 0",
-              "   set align_board_yaw = 0",
-              "   save",
-              "",
-              "3) If accelerometer calibration does not work:",
-              "   set acczero_x = 0",
-              "   set acczero_y = -2",
-              "   set acczero_z = 20",
-              "   set accgain_x = 4091",
-              "   set accgain_y = 4093",
-              "   set accgain_z = 4094",
-              "   save",
-              "",
-              "Test order recommendation:",
-              "1. CW0_DEG",
-              "2. CW90_DEG",
-              "3. CW180_DEG",
-              "4. CW270_DEG",
-              "5. CW0_DEG_FLIP",
-              "6. CW90_DEG_FLIP",
-              "7. CW180_DEG_FLIP",
-              "8. CW270_DEG_FLIP",
-              "",
-          ])
-
-          readme = Path("../../out/README_RUNA_FC45_ORIENTATION_TEST.txt")
-          readme.write_text(readme_text, encoding="utf-8")
-          print("README written:", readme)
-          PY
-
-          echo "===== FINAL OUT FILES ====="
+          echo "Final files:"
           ls -la ../../out
 
-      - name: Upload firmware pack
+      - name: Upload firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-CADDXF405-WING-ORIENTATION-PACK-FULL-FIX
+          name: ${{ matrix.artifact }}
           path: out/*
