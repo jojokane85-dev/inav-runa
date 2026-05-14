@@ -1,4 +1,4 @@
-name: Build RUNA FC45 SWAP XY
+name: Build RUNA FC45 SWAP XY REVERSE
 
 on:
   workflow_dispatch:
@@ -122,7 +122,7 @@ jobs:
 
           grep -n -E "LSM6|IMU|PA4|SPI1|CW0" src/main/target/${TARGET}/target.h || true
 
-      - name: Patch LSM6DXX FORCE DETECT and SWAP XY
+      - name: Patch LSM6DXX FORCE DETECT and SWAP XY REVERSE
         run: |
           cd inav
 
@@ -198,21 +198,15 @@ jobs:
               const float runaRawZ = (float) int16_val_little_endian(data, 2);
 
               /*
-               * RUNA FC45 manual ACC axis correction.
-               *
-               * Before:
-               * left  = up
-               * right = down
-               * up    = right
-               * down  = left
+               * RUNA FC45 manual ACC axis correction REVERSE.
                *
                * Fix:
-               * X = -Y
-               * Y =  X
+               * X =  Y
+               * Y = -X
                * Z =  Z
                */
-              acc->ADCRaw[X] = -runaRawY;
-              acc->ADCRaw[Y] =  runaRawX;
+              acc->ADCRaw[X] =  runaRawY;
+              acc->ADCRaw[Y] = -runaRawX;
               acc->ADCRaw[Z] =  runaRawZ;
 
               return true;
@@ -233,15 +227,15 @@ jobs:
               const float runaGyroZ = (float) int16_val_little_endian(data, 2);
 
               /*
-               * RUNA FC45 manual GYRO axis correction.
+               * RUNA FC45 manual GYRO axis correction REVERSE.
                *
                * Fix:
-               * X = -Y
-               * Y =  X
+               * X =  Y
+               * Y = -X
                * Z =  Z
                */
-              gyro->gyroADCRaw[X] = -runaGyroY;
-              gyro->gyroADCRaw[Y] =  runaGyroX;
+              gyro->gyroADCRaw[X] =  runaGyroY;
+              gyro->gyroADCRaw[Y] = -runaGyroX;
               gyro->gyroADCRaw[Z] =  runaGyroZ;
 
               return true;
@@ -254,7 +248,7 @@ jobs:
           path.write_text(text, encoding="utf-8")
 
           print("RUNA FORCE DETECT patched")
-          print("RUNA SWAP XY patched")
+          print("RUNA SWAP XY REVERSE patched")
           PY
 
           echo "==== CHECK RUNA PATCH ===="
@@ -466,7 +460,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="../../out/RUNA_FC45_SWAP_XY_${base}"
+            dst="../../out/RUNA_FC45_SWAP_XY_REVERSE_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -478,12 +472,12 @@ jobs:
             exit 1
           fi
 
-          cat > ../../out/README_RUNA_FC45_SWAP_XY.txt <<EOF
-          RUNA FC45 CADDXF405_WING SWAP XY
+          cat > ../../out/README_RUNA_FC45_SWAP_XY_REVERSE.txt <<EOF
+          RUNA FC45 CADDXF405_WING SWAP XY REVERSE
 
           Manual axis correction:
-          X = -Y
-          Y =  X
+          X =  Y
+          Y = -X
           Z =  Z
 
           After flashing:
@@ -519,5 +513,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-CADDXF405-WING-SWAP-XY
+          name: RUNA-FC45-CADDXF405-WING-SWAP-XY-REVERSE
           path: out/*
