@@ -1,4 +1,4 @@
-name: Build RUNA FC45 Orientation Pack FIXED
+  name: Build RUNA FC45 Orientation Pack FULL FIX
 
 on:
   workflow_dispatch:
@@ -220,6 +220,9 @@ jobs:
           text = patch_setting(text, "acc_hardware", "LSM6DXX")
 
           # Как в рабочей оригинальной CADDXF405_WING:
+          # RSSI = ADC3
+          # CURRENT = ADC2
+          # AIRSPEED = ADC4
           text = patch_setting(text, "rssi_adc_channel", "3")
           text = patch_setting(text, "current_adc_channel", "2")
           text = patch_setting(text, "airspeed_adc_channel", "4")
@@ -382,68 +385,52 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build all orientation firmwares
+      - name: Build and collect all orientation firmwares
         run: |
+          mkdir -p out
+
           cd inav/build
+
+          declare -A ALIGN
+          ALIGN[R45CW0]="CW0_DEG"
+          ALIGN[R45CW90]="CW90_DEG"
+          ALIGN[R45CW180]="CW180_DEG"
+          ALIGN[R45CW270]="CW270_DEG"
+          ALIGN[R45CW0F]="CW0_DEG_FLIP"
+          ALIGN[R45CW90F]="CW90_DEG_FLIP"
+          ALIGN[R45CW180F]="CW180_DEG_FLIP"
+          ALIGN[R45CW270F]="CW270_DEG_FLIP"
 
           TARGETS="R45CW0 R45CW90 R45CW180 R45CW270 R45CW0F R45CW90F R45CW180F R45CW270F"
 
           for T in $TARGETS; do
             echo "=============================="
-            echo "BUILDING $T"
+            echo "BUILDING $T / ${ALIGN[$T]}"
             echo "=============================="
+
             make clean_${T} || true
             make ${T} -j2 VERBOSE=1
+
+            echo "Collecting files for $T..."
+
+            FOUND=0
+
+            while IFS= read -r f; do
+              base="$(basename "$f")"
+              dst="../../out/RUNA_FC45_${ALIGN[$T]}_${base}"
+              cp "$f" "$dst"
+              echo "Copied: $dst"
+              FOUND=$((FOUND + 1))
+            done < <(find . -type f \( -name "*${T}*.hex" -o -name "*${T}*.bin" -o -name "*${T}*.elf" \))
+
+            if [ "$FOUND" -eq 0 ]; then
+              echo "ERROR: no firmware files found for $T"
+              exit 1
+            fi
           done
-
-      - name: Find firmware
-        if: always()
-        run: |
-          echo "===== BUILT FILES ====="
-          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
-
-      - name: Collect firmware
-        if: success()
-        run: |
-          mkdir -p out
 
           python3 <<'PY'
           from pathlib import Path
-          import shutil
-
-          targets = {
-              "R45CW0": "CW0_DEG",
-              "R45CW90": "CW90_DEG",
-              "R45CW180": "CW180_DEG",
-              "R45CW270": "CW270_DEG",
-              "R45CW0F": "CW0_DEG_FLIP",
-              "R45CW90F": "CW90_DEG_FLIP",
-              "R45CW180F": "CW180_DEG_FLIP",
-              "R45CW270F": "CW270_DEG_FLIP",
-          }
-
-          build_dir = Path("inav/build")
-          out_dir = Path("out")
-          copied = 0
-
-          for file in build_dir.rglob("*"):
-              if not file.is_file():
-                  continue
-
-              if file.suffix.lower() not in {".hex", ".bin", ".elf"}:
-                  continue
-
-              for target, align in targets.items():
-                  if target in file.name:
-                      dst = out_dir / f"RUNA_FC45_{align}_{file.name}"
-                      shutil.copy2(file, dst)
-                      print("Copied:", dst)
-                      copied += 1
-                      break
-
-          if copied == 0:
-              print("ERROR: no firmware files found")
-              raise SystemExit(1)
 
           readme_text = "\n".join([
               "RUNA FC45 CADDXF405_WING ORIENTATION TEST PACK",
@@ -492,15 +479,17 @@ jobs:
               "",
           ])
 
-          readme = out_dir / "README_RUNA_FC45_ORIENTATION_TEST.txt"
+          readme = Path("../../out/README_RUNA_FC45_ORIENTATION_TEST.txt")
           readme.write_text(readme_text, encoding="utf-8")
-
-          print("Total copied:", copied)
+          print("README written:", readme)
           PY
+
+          echo "===== FINAL OUT FILES ====="
+          ls -la ../../out
 
       - name: Upload firmware pack
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-CADDXF405-WING-ORIENTATION-PACK-FIXED
+          name: RUNA-FC45-CADDXF405-WING-ORIENTATION-PACK-FULL-FIX
           path: out/*
