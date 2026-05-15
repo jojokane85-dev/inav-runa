@@ -1,15 +1,15 @@
-name: Find INAV 8 Targets
+name: Build STOCK CADDXF4 INAV 8
 
 on:
   workflow_dispatch:
-  push:
 
 jobs:
-  find-targets:
+  build:
     runs-on: ubuntu-22.04
 
     env:
       INAV_VERSION: 8.0.1
+      TARGET: CADDXF4_AIO_ELRS
 
     steps:
       - name: Install deps
@@ -34,8 +34,6 @@ jobs:
         run: |
           git clone --branch ${INAV_VERSION} --depth 1 https://github.com/iNavFlight/inav.git
           cd inav
-          echo "INAV version: ${INAV_VERSION}"
-          echo "Commit:"
           git rev-parse HEAD
 
       - name: Configure CMake
@@ -45,74 +43,30 @@ jobs:
           cd build
           cmake ..
 
-      - name: Show ALL INAV targets
+      - name: Check target
         run: |
           cd inav/build
+          make help | grep -w "${TARGET}" || {
+            echo "Target not found: ${TARGET}"
+            exit 1
+          }
 
-          echo "======================================"
-          echo "ALL AVAILABLE INAV TARGETS"
-          echo "======================================"
-          make help | sort || true
-
-      - name: Show CADDX CADDY F405 AIO ELRS targets
+      - name: Build STOCK firmware
         run: |
           cd inav/build
+          make clean_${TARGET} || true
+          make ${TARGET} -j$(nproc)
 
-          echo "======================================"
-          echo "CADDX / CADDY / CAD / XF405 / F405 / AIO / ELRS TARGETS"
-          echo "======================================"
-
-          make help | grep -i -E "CAD|CADD|CADDX|CADDY|XF405|F405|AIO|ELRS" | sort || true
-
-      - name: Show possible CADDXF4 variants
-        run: |
-          cd inav/build
-
-          echo "======================================"
-          echo "CADDXF4 / CADDYF4 / F4 VARIANTS"
-          echo "======================================"
-
-          echo ""
-          echo "===== CADDXF4 ====="
-          make help | grep -i "CADDXF4" || true
-
-          echo ""
-          echo "===== CADDYF4 ====="
-          make help | grep -i "CADDYF4" || true
-
-          echo ""
-          echo "===== CADDX ====="
-          make help | grep -i "CADDX" || true
-
-          echo ""
-          echo "===== CADDY ====="
-          make help | grep -i "CADDY" || true
-
-          echo ""
-          echo "===== F405 ====="
-          make help | grep -i "F405" || true
-
-          echo ""
-          echo "===== AIO ====="
-          make help | grep -i "AIO" || true
-
-          echo ""
-          echo "===== ELRS ====="
-          make help | grep -i "ELRS" || true
-
-      - name: Save target list to files
+      - name: Collect firmware
         run: |
           mkdir -p out
-          cd inav/build
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
+          find inav/build -type f -name "*.hex" -exec cp {} out/ \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/ \;
+          find inav/build -type f -name "*.elf" -exec cp {} out/ \;
 
-          make help | sort > ../../out/ALL_INAV8_TARGETS.txt || true
-          make help | grep -i -E "CAD|CADD|CADDX|CADDY|XF405|F405|AIO|ELRS" | sort > ../../out/POSSIBLE_CADDX_F405_AIO_ELRS_TARGETS.txt || true
-
-          echo "Files created:"
-          ls -lah ../../out
-
-      - name: Upload target lists
+      - name: Upload STOCK firmware
         uses: actions/upload-artifact@v4
         with:
-          name: INAV8-target-lists
+          name: STOCK-CADDXF4-AIO-ELRS-INAV8
           path: out/*
