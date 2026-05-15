@@ -1,4 +1,4 @@
-name: Build JHEMCUF405WING RUNA INAV 8
+name: Build SKYSTARSF405WING RUNA INAV 8
 
 on:
   workflow_dispatch:
@@ -11,15 +11,15 @@ jobs:
     env:
       INAV_VERSION: 8.0.1
 
-      # Пробный WING target, похожий на CADDXF405_WING
-      TARGET: JHEMCUF405WING
+      # Второй пробный WING target, похожий на CADDXF405_WING
+      TARGET: SKYSTARSF405WING
 
       # ВАЖНО:
       # OLD_TARGET_NAME и NEW_TARGET_NAME должны быть одинаковой длины.
-      # JHEMCUF405WING = 14 символов
-      # JHEMCU405+RUNA = 14 символов
-      OLD_TARGET_NAME: JHEMCUF405WING
-      NEW_TARGET_NAME: JHEMCU405+RUNA
+      # SKYSTARSF405WING = 16 символов
+      # SKYSTARS405+RUNA = 16 символов
+      OLD_TARGET_NAME: SKYSTARSF405WING
+      NEW_TARGET_NAME: SKYSTARS405+RUNA
 
     steps:
       - name: Install deps
@@ -402,7 +402,7 @@ jobs:
           if not positions:
               print("WARNING: Target string not found in complete HEX memory image")
               print("HEX will be copied without +RUNA name patch")
-              dst = out / "JHEMCUF405WING_RUNA_INAV8_UNPATCHED.hex"
+              dst = out / "SKYSTARSF405WING_RUNA_INAV8_UNPATCHED.hex"
               dst.write_text(src.read_text())
               raise SystemExit(0)
 
@@ -440,7 +440,7 @@ jobs:
               else:
                   patched_lines.append(line)
 
-          dst = out / "JHEMCU405_RUNA_INAV8.hex"
+          dst = out / "SKYSTARS405_RUNA_INAV8.hex"
           dst.write_text("\n".join(patched_lines) + "\n")
           print("patched HEX written:", dst)
           PY
@@ -531,13 +531,13 @@ jobs:
           EOF
 
           cat > out/README_RUNA_INAV8.txt <<'EOF'
-          RUNA JHEMCUF405WING - INAV 8.0.1
+          RUNA SKYSTARSF405WING - INAV 8.0.1
 
           Target:
-          - JHEMCUF405WING
+          - SKYSTARSF405WING
 
           Display name after HEX patch:
-          - JHEMCU405+RUNA
+          - SKYSTARS405+RUNA
 
           Added:
           - +RUNA name
@@ -573,6 +573,9 @@ jobs:
 
           Do not fly. This target does not match the board.
 
+          If this target still has no GYRO/ACC, try next:
+          - SPEEDYBEEF405WING
+
           Use only one preset:
           - RUNA_PRESET_5G8_INAV8.cli
           - RUNA_PRESET_3G3_INAV8.cli
@@ -586,5 +589,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: JHEMCUF405WING-RUNA-INAV8-Firmware
+          name: SKYSTARSF405WING-RUNA-INAV8-Firmware
           path: out/*
