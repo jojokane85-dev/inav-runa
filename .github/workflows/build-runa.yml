@@ -1,4 +1,4 @@
-name: Build RUNA FC45 FULL SOURCE
+name: Build CADDXF4 RUNA Firmware
 
 on:
   workflow_dispatch:
@@ -9,159 +9,48 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      BASE_TARGET: SPEEDYBEEF405WING
-      TARGET: CADDXF405_WING
+      TARGET: CADDXF4_AIO_ELRS
+      RUNA_NAME: CADDXF4_AIO+RUNA
 
     steps:
       - name: Install deps
         run: |
           sudo apt-get update -y -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends \
-            git build-essential g++ ruby cmake make \
-            gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
-            libstdc++-arm-none-eabi-dev ninja-build python3 python3-pip
+            git \
+            build-essential \
+            g++ \
+            ruby \
+            cmake \
+            make \
+            gcc-arm-none-eabi \
+            binutils-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-dev \
+            ninja-build \
+            python3 \
+            python3-pip
 
       - name: Clone INAV 7.1.2
         run: |
           git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
           cd inav
+          echo "Current commit:"
           git rev-parse HEAD
 
-      - name: Create CADDXF405_WING target
+      - name: Patch startup text RUNAv.1
         run: |
           cd inav
-          rm -rf src/main/target/${TARGET}
-          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
-          sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
-          cat src/main/target/${TARGET}/CMakeLists.txt
 
-      - name: Patch target to CADDXF405_WING LSM6DXX
-        run: |
-          cd inav
           python3 <<'PY'
           from pathlib import Path
-          import os, re
 
-          target = os.environ["TARGET"]
-          path = Path(f"src/main/target/{target}/target.h")
+          path = Path("src/main/io/osd.c")
           text = path.read_text(encoding="utf-8")
 
-          remove_patterns = [
-              r'#define\s+USE_IMU_ICM42605\s*',
-              r'#define\s+IMU_ICM42605_ALIGN\s+\S+\s*',
-              r'#define\s+ICM42605_CS_PIN\s+\S+\s*',
-              r'#define\s+ICM42605_SPI_BUS\s+\S+\s*',
-              r'#define\s+USE_IMU_ICM42688P\s*',
-              r'#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*',
-              r'#define\s+ICM42688P_CS_PIN\s+\S+\s*',
-              r'#define\s+ICM42688P_SPI_BUS\s+\S+\s*',
-              r'#define\s+USE_IMU_LSM6DXX\s*',
-              r'#define\s+LSM6DXX_SPI_BUS\s+\S+\s*',
-              r'#define\s+LSM6DXX_CS_PIN\s+\S+\s*',
-              r'#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*',
-          ]
-          for p in remove_patterns:
-              text = re.sub(p, "", text, flags=re.M)
-
-          text += """
-
-          /*
-           * RUNA CADDXF405_WING FC4.5
-           * Working board:
-           * GYRO=LSM6DXX, ACC=LSM6DXX, BARO=SPL06, MAG=QMC5883
-           * PA4 = MPU CS, PA5/PA6/PA7 = SPI1
-           */
-          #define USE_IMU_LSM6DXX
-          #define LSM6DXX_SPI_BUS BUS_SPI1
-          #define LSM6DXX_CS_PIN PA4
-          #define IMU_LSM6DXX_ALIGN CW0_DEG
-
-          #define USE_MAG_QMC5883
-          #define USE_MAG_HMC5883
-          #define MAG_I2C_BUS BUS_I2C1
-
-          #define USE_BARO_SPL06
-          #define BARO_I2C_BUS BUS_I2C1
-          """
-
-          path.write_text(text, encoding="utf-8")
-          print("RUNA target.h patched")
-          PY
-          grep -n -E "LSM6|QMC|HMC|SPL06|PA4|SPI1|CW0" src/main/target/${TARGET}/target.h || true
-
-      - name: Patch LSM6DXX robust detect
-        run: |
-          cd inav
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
-          text = path.read_text(encoding="utf-8")
-
-          sig = "static bool lsm6dxxDetect"
-          start = text.find(sig)
-          if start == -1:
-              raise SystemExit("lsm6dxxDetect not found")
-
-          brace = text.find("{", start)
-          depth = 0
-          end = -1
-          for i in range(brace, len(text)):
-              if text[i] == "{":
-                  depth += 1
-              elif text[i] == "}":
-                  depth -= 1
-                  if depth == 0:
-                      end = i + 1
-                      break
-          if end == -1:
-              raise SystemExit("lsm6dxxDetect end not found")
-
-          repl = """static bool lsm6dxxDetect(busDevice_t * dev)
-          {
-              uint8_t tmp = 0;
-
-              busSetSpeed(dev, BUS_SPEED_INITIALIZATION);
-              delay(150);
-              busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);
-
-              /*
-               * RUNA FC45 robust LSM6DXX detection.
-               */
-              if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
-                  lsm6dID = tmp;
-              } else {
-                  lsm6dID = LSM6DS3_CHIP_ID;
-              }
-
-              return true;
-          }"""
-          text = text[:start] + repl + text[end:]
-          path.write_text(text, encoding="utf-8")
-          print("RUNA LSM6DXX detect patched")
-          PY
-
-      - name: Patch RUNA name and startup text
-        run: |
-          cd inav
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          p = Path("src/main/fc/fc_msp.c")
-          text = p.read_text(encoding="utf-8")
-          pat = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
-          rep = """const char *runaTargetName = "CADDXF405+RUNA";
-                  sbufWriteU8(dst, strlen(runaTargetName));
-                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));"""
-          text, c = re.subn(pat, rep, text, count=1)
-          p.write_text(text, encoding="utf-8")
-          print("MSP name patch count:", c)
-
-          p = Path("src/main/io/osd.c")
-          text = p.read_text(encoding="utf-8")
           old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
-          new = 'tfp_sprintf(string_buffer, "version RUNA 1.0");'
+          new = 'tfp_sprintf(string_buffer, "RUNAv.1");'
+
           if old in text:
               text = text.replace(old, new, 1)
               text = text.replace(
@@ -169,12 +58,17 @@ jobs:
                   'uint8_t xPos = OSD_CENTER_S(string_buffer);',
                   1
               )
-          p.write_text(text, encoding="utf-8")
+              print("Startup text patched: RUNAv.1")
+          else:
+              print("WARNING: startup text pattern not found")
+
+          path.write_text(text, encoding="utf-8")
           PY
 
       - name: Patch RUNA OSD shutter
         run: |
           cd inav
+
           python3 <<'PY'
           from pathlib import Path
           import re
@@ -184,7 +78,7 @@ jobs:
 
           pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
 
-          replacement = r"""
+          replacement = r'''
                   static bool runaShutterWasActive = false;
                   static uint8_t runaShutterNextRow = 0;
 
@@ -255,41 +149,55 @@ jobs:
                   }
 
                   displayHeartbeat(osdDisplayPort);
-                  displayCommitTransaction(osdDisplayPort);"""
+                  displayCommitTransaction(osdDisplayPort);'''
 
           new_text, count = re.subn(pattern, replacement, text, count=1)
+
           if count != 1:
-              raise SystemExit("OSD draw block not found")
+              print("ERROR: OSD draw block not found")
+              raise SystemExit(1)
 
           path.write_text(new_text, encoding="utf-8")
           print("RUNA OSD shutter patched")
           PY
 
-      - name: Patch VTX 3.3GHz table
+      - name: Patch VTX 3.3 GHz table
         run: |
           cd inav
+
           python3 <<'PY'
           from pathlib import Path
           import re
 
           path = Path("src/main/io/vtx_string.c")
+
           if not path.exists():
-              print("vtx_string.c not found, skip")
+              print("WARNING: src/main/io/vtx_string.c not found, skip VTX table patch")
               raise SystemExit(0)
 
           text = path.read_text(encoding="utf-8")
 
-          def sub(text, pattern, repl, name, flags=0):
-              new, count = re.subn(pattern, repl, text, count=1, flags=flags)
-              print(name, "patch count:", count)
-              return new if count else text
+          def sub_once(text, pattern, repl, name, flags=0):
+              new_text, count = re.subn(pattern, repl, text, count=1, flags=flags)
+              print(f"{name}: patch count = {count}")
+              return new_text if count else text
 
-          text = sub(text, r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
-                     "#define VTX_STRING_1G3_BAND_COUNT 6", "band count")
-          text = sub(text, r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
-                     "#define VTX_STRING_1G3_POWER_COUNT 5", "power count")
+          text = sub_once(
+              text,
+              r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_BAND_COUNT 6",
+              "1G3 band count"
+          )
 
-          text = sub(text,
+          text = sub_once(
+              text,
+              r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_POWER_COUNT 5",
+              "1G3 power count"
+          )
+
+          text = sub_once(
+              text,
               r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
               """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
               { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
@@ -299,9 +207,39 @@ jobs:
               { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
               { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
           };""",
-              "3.3 table", flags=re.S)
+              "3.3GHz frequency table",
+              flags=re.S
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
+              "-", "A", "B", "C", "D", "E", "F",
+          };""",
+              "3.3GHz band names",
+              flags=re.S
+          )
+
+          text = sub_once(
+              text,
+              r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
+              'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
+              "3.3GHz band letters"
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
+              "---", "25", "200", "400", "800", "MAX"
+          };""",
+              "3.3GHz power names",
+              flags=re.S
+          )
 
           path.write_text(text, encoding="utf-8")
+          print("RUNA VTX 3.3 table patch finished")
           PY
 
       - name: Configure CMake
@@ -311,35 +249,150 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build firmware
+      - name: Check target exists
+        run: |
+          cd inav/build
+          echo "Checking target: ${TARGET}"
+          make help | grep "${TARGET}" || {
+            echo "TARGET NOT FOUND: ${TARGET}"
+            echo "Available CADDX/CAD/CADDY targets:"
+            make help | grep -i -E "CAD|CADD|CADDX|CADDY|XF405|F405" || true
+            exit 1
+          }
+
+      - name: Build CADDXF4 AIO ELRS
         run: |
           cd inav/build
           make clean_${TARGET} || true
-          make ${TARGET} -j2 VERBOSE=1
+          make ${TARGET} -j$(nproc)
 
-      - name: Collect firmware and presets
-        if: success()
+      - name: Find built firmware
+        if: always()
+        run: |
+          echo "Built firmware files:"
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+
+      - name: Patch RUNA name in HEX and collect
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          old = b"CADDXF4_AIO_ELRS"
+          new = b"CADDXF4_AIO+RUNA"
+
+          if len(old) != len(new):
+              raise SystemExit(f"Length mismatch: old={len(old)} new={len(new)}")
+
+          out = Path("out")
+          out.mkdir(exist_ok=True)
+
+          hex_files = list(Path("inav/build").rglob("*CADDXF4_AIO_ELRS*.hex"))
+          if not hex_files:
+              hex_files = list(Path("inav/build").rglob("*.hex"))
+
+          if not hex_files:
+              raise SystemExit("No HEX files found")
+
+          src = hex_files[0]
+          print("Using HEX:", src)
+
+          records = []
+          memory = {}
+          base = 0
+
+          def parse_record(line):
+              count = int(line[1:3], 16)
+              addr = int(line[3:7], 16)
+              rectype = int(line[7:9], 16)
+              data = bytes.fromhex(line[9:9 + count * 2])
+              return count, addr, rectype, data
+
+          for line in src.read_text().splitlines():
+              if not line.startswith(":"):
+                  records.append((line, None))
+                  continue
+
+              count, addr, rectype, data = parse_record(line)
+              records.append((line, (count, addr, rectype, data, base)))
+
+              if rectype == 0:
+                  absolute = base + addr
+                  for i, b in enumerate(data):
+                      memory[absolute + i] = b
+              elif rectype == 4:
+                  base = int.from_bytes(data, "big") << 16
+              elif rectype == 2:
+                  base = int.from_bytes(data, "big") << 4
+
+          if not memory:
+              raise SystemExit("No data records found")
+
+          min_addr = min(memory)
+          max_addr = max(memory)
+          image = bytearray([0xFF] * (max_addr - min_addr + 1))
+
+          for addr, b in memory.items():
+              image[addr - min_addr] = b
+
+          positions = []
+          start = 0
+
+          while True:
+              pos = image.find(old, start)
+              if pos < 0:
+                  break
+              positions.append(pos)
+              start = pos + 1
+
+          if not positions:
+              raise SystemExit("Target string not found in complete HEX memory image")
+
+          for pos in positions:
+              abs_pos = min_addr + pos
+              print("Patch target name at:", hex(abs_pos))
+              for i, b in enumerate(new):
+                  memory[abs_pos + i] = b
+
+          def checksum(record_bytes):
+              return ((~sum(record_bytes) + 1) & 0xFF)
+
+          patched_lines = []
+
+          for line, info in records:
+              if info is None:
+                  patched_lines.append(line)
+                  continue
+
+              count, addr, rectype, data, rec_base = info
+
+              if rectype == 0:
+                  absolute = rec_base + addr
+                  new_data = bytes(memory[absolute + i] for i in range(count))
+
+                  rec = bytearray()
+                  rec.append(count)
+                  rec.append((addr >> 8) & 0xFF)
+                  rec.append(addr & 0xFF)
+                  rec.append(rectype)
+                  rec.extend(new_data)
+                  chk = checksum(rec)
+
+                  patched_lines.append(":" + rec.hex().upper() + f"{chk:02X}")
+              else:
+                  patched_lines.append(line)
+
+          dst = out / "CADDXF4_RUNA.hex"
+          dst.write_text("\n".join(patched_lines) + "\n")
+          print("patched HEX written:", dst)
+          PY
+
+      - name: Create RUNA CLI presets
         run: |
           mkdir -p out
-          cd inav/build
 
-          FOUND=0
-          while IFS= read -r f; do
-            base="$(basename "$f")"
-            dst="../../out/RUNA_FC45_FULL_${base}"
-            cp "$f" "$dst"
-            echo "Copied: $dst"
-            FOUND=$((FOUND + 1))
-          done < <(find . -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
-
-          if [ "$FOUND" -eq 0 ]; then
-            echo "ERROR: no firmware files found"
-            find . -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
-            exit 1
-          fi
-
-          cat > ../../out/RUNA_FC45_PRESET_5G8.cli <<'EOF'
+          cat > out/RUNA_PRESET_5G8.cli <<'EOF'
           batch start
+
           feature OSD
           feature VTX
           feature TELEMETRY
@@ -347,34 +400,7 @@ jobs:
           feature BLACKBOX
           feature PWM_OUTPUT_ENABLE
 
-          set acc_hardware = LSM6DXX
-          set baro_hardware = SPL06
-          set mag_hardware = QMC5883
-
-          set align_board_roll = 0
-          set align_board_pitch = 0
-          set align_board_yaw = 1800
-
-          set acczero_x = 0
-          set acczero_y = -2
-          set acczero_z = 20
-          set accgain_x = 4091
-          set accgain_y = 4093
-          set accgain_z = 4094
-
-          set vbat_adc_channel = 1
-          set rssi_adc_channel = 3
-          set current_adc_channel = 2
-          set airspeed_adc_channel = 4
-
-          set receiver_type = SERIAL
-          set serialrx_provider = CRSF
-
-          set align_mag = CW0FLIP
-          set align_mag_roll = 0
-          set align_mag_pitch = 0
-          set align_mag_yaw = 0
-
+          # VTX 5.8GHz
           set vtx_frequency_group = FREQUENCYGROUP_5G8
           set vtx_band = 1
           set vtx_channel = 1
@@ -385,18 +411,24 @@ jobs:
           set vtx_smartaudio_alternate_softserial_method = ON
           set vtx_smartaudio_stopbits = 2
 
+          # AUX4 / CH8
+          # MID  = RUNA OSD-штора / layout 2
+          # HIGH = layout 3
           aux 20 33 3 1300 1700
           aux 21 34 3 1700 2100
 
+          # RUNA PINIO
           set pinio_box1 = 47
           set pinio_box2 = 255
           set pinio_box3 = 57
           set pinio_box4 = 255
+
           save
           EOF
 
-          cat > ../../out/RUNA_FC45_PRESET_3G3.cli <<'EOF'
+          cat > out/RUNA_PRESET_3G3.cli <<'EOF'
           batch start
+
           feature OSD
           feature VTX
           feature TELEMETRY
@@ -404,34 +436,8 @@ jobs:
           feature BLACKBOX
           feature PWM_OUTPUT_ENABLE
 
-          set acc_hardware = LSM6DXX
-          set baro_hardware = SPL06
-          set mag_hardware = QMC5883
-
-          set align_board_roll = 0
-          set align_board_pitch = 0
-          set align_board_yaw = 1800
-
-          set acczero_x = 0
-          set acczero_y = -2
-          set acczero_z = 20
-          set accgain_x = 4091
-          set accgain_y = 4093
-          set accgain_z = 4094
-
-          set vbat_adc_channel = 1
-          set rssi_adc_channel = 3
-          set current_adc_channel = 2
-          set airspeed_adc_channel = 4
-
-          set receiver_type = SERIAL
-          set serialrx_provider = CRSF
-
-          set align_mag = CW0FLIP
-          set align_mag_roll = 0
-          set align_mag_pitch = 0
-          set align_mag_yaw = 0
-
+          # VTX 3.3GHz
+          # Таблица 3.3 вшита в группу FREQUENCYGROUP_1G3
           set vtx_frequency_group = FREQUENCYGROUP_1G3
           set vtx_band = 1
           set vtx_channel = 1
@@ -442,52 +448,46 @@ jobs:
           set vtx_smartaudio_alternate_softserial_method = ON
           set vtx_smartaudio_stopbits = 2
 
+          # AUX4 / CH8
+          # MID  = RUNA OSD-штора / layout 2
+          # HIGH = layout 3
           aux 20 33 3 1300 1700
           aux 21 34 3 1700 2100
 
+          # RUNA PINIO
           set pinio_box1 = 47
           set pinio_box2 = 255
           set pinio_box3 = 57
           set pinio_box4 = 255
+
           save
           EOF
 
-          cat > ../../out/README_RUNA_FC45_FULL.txt <<'EOF'
-          RUNA FC45 FULL SOURCE BUILD
+          cat > out/README_RUNA.txt <<'EOF'
+          RUNA CADDXF4 AIO ELRS
 
           Added:
-          - CADDXF405+RUNA name
-          - startup text: version RUNA 1.0
-          - LSM6DXX / SPL06 / QMC5883 target patch
+          - CADDXF4_AIO+RUNA name
+          - RUNAv.1 startup OSD text
           - RUNA OSD shutter on layout 2
+          - VTX 5.8GHz preset
           - VTX 3.3GHz table in FREQUENCYGROUP_1G3
-          - 5.8GHz and 3.3GHz CLI presets
-
-          IMPORTANT:
-          This is an experimental source-built firmware.
-          Test without propeller.
+          - AUX4 / CH8 for OSD shutter/layout 2
 
           After flashing:
-          1) Check status:
-             GYRO=OK
-             ACC=OK
-             MAG=OK
-             BARO=OK
+          1. Test without propeller.
+          2. Check status.
+          3. Check Setup movement.
+          4. Apply one preset:
+             RUNA_PRESET_5G8.cli
+             or
+             RUNA_PRESET_3G3.cli
 
-          2) Check Setup movement:
-             nose up -> model nose up
-             nose down -> model nose down
-             left wing down -> model left
-             right wing down -> model right
-
-          If axes or sensors are wrong, return to your known-working CADDXF405+RUNA hex.
+          If sensors or model movement are wrong, do not fly.
           EOF
 
-          ls -la ../../out
-
       - name: Upload firmware
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-FULL-SOURCE
+          name: CADDXF4-RUNA-Firmware
           path: out/*
