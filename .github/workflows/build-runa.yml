@@ -1,4 +1,4 @@
-name: Build RUNA FC45 FIXED IMU
+name: Build RUNA FC45 CW90 FLIP
 
 on:
   workflow_dispatch:
@@ -13,8 +13,8 @@ jobs:
       TARGET: CADDXF405_WING
       INAV_VERSION: 7.1.2
 
-      # Если оси всё равно неверные, поменяй на CW270_DEG или CW180_DEG
-      IMU_ALIGN: CW90_DEG
+      # Новый тест ориентации IMU
+      IMU_ALIGN: CW90_DEG_FLIP
 
     steps:
       - name: Install deps
@@ -60,7 +60,7 @@ jobs:
             cat src/main/target/${TARGET}/CMakeLists.txt
           fi
 
-      - name: Patch target to CADDXF405_WING LSM6DXX fixed axis
+      - name: Patch target to CADDXF405_WING LSM6DXX CW90 FLIP
         run: |
           cd inav
 
@@ -70,7 +70,7 @@ jobs:
           import re
 
           target = os.environ["TARGET"]
-          imu_align = os.environ.get("IMU_ALIGN", "CW90_DEG")
+          imu_align = os.environ.get("IMU_ALIGN", "CW90_DEG_FLIP")
 
           path = Path(f"src/main/target/{target}/target.h")
           text = path.read_text(encoding="utf-8")
@@ -114,7 +114,7 @@ jobs:
            * BARO: SPL06
            * MAG: QMC5883 / HMC5883
            *
-           * Axis fix:
+           * Axis test:
            * IMU_LSM6DXX_ALIGN = {imu_align}
            */
           #define USE_IMU_LSM6DXX
@@ -135,7 +135,7 @@ jobs:
           print("IMU align:", imu_align)
           PY
 
-          grep -n -E "LSM6|QMC|HMC|SPL06|PA4|SPI1|CW" src/main/target/${TARGET}/target.h || true
+          grep -n -E "LSM6|QMC|HMC|SPL06|PA4|SPI1|CW|FLIP" src/main/target/${TARGET}/target.h || true
 
       - name: Patch LSM6DXX safe detect
         run: |
@@ -185,8 +185,6 @@ jobs:
 
               /*
                * RUNA FC45 safe LSM6DXX detection.
-               *
-               * Do NOT force true if chip is not detected.
                * Accepted IDs:
                * 0x69 / 0x6A / 0x6B / 0x6C / 0x6D
                */
@@ -443,7 +441,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="../../out/RUNA_FC45_FIXED_IMU_${base}"
+            dst="../../out/RUNA_FC45_CW90_FLIP_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -455,7 +453,7 @@ jobs:
             exit 1
           fi
 
-          cat > ../../out/RUNA_FC45_PRESET_5G8_FIXED_IMU.cli <<'EOF'
+          cat > ../../out/RUNA_FC45_PRESET_5G8_CW90_FLIP.cli <<'EOF'
           batch start
 
           feature OSD
@@ -467,19 +465,24 @@ jobs:
 
           set acc_hardware = LSM6DXX
           set baro_hardware = SPL06
-          set mag_hardware = QMC5883
+          set mag_hardware = NONE
 
-          # Axis fix
+          # For this test keep board alignment zero.
+          # If axes are rotated, try yaw 900/1800/2700 after checking drift.
           set align_board_roll = 0
           set align_board_pitch = 0
-          set align_board_yaw = 900
+          set align_board_yaw = 0
+
+          set gyro_zero_x = 0
+          set gyro_zero_y = 0
+          set gyro_zero_z = 0
 
           set acczero_x = 0
-          set acczero_y = -2
-          set acczero_z = 20
-          set accgain_x = 4091
-          set accgain_y = 4093
-          set accgain_z = 4094
+          set acczero_y = 0
+          set acczero_z = 0
+          set accgain_x = 4096
+          set accgain_y = 4096
+          set accgain_z = 4096
 
           set vbat_adc_channel = 1
           set rssi_adc_channel = 3
@@ -488,11 +491,6 @@ jobs:
 
           set receiver_type = SERIAL
           set serialrx_provider = CRSF
-
-          set align_mag = CW0FLIP
-          set align_mag_roll = 0
-          set align_mag_pitch = 0
-          set align_mag_yaw = 0
 
           set vtx_frequency_group = FREQUENCYGROUP_5G8
           set vtx_band = 1
@@ -518,7 +516,7 @@ jobs:
           save
           EOF
 
-          cat > ../../out/RUNA_FC45_PRESET_3G3_FIXED_IMU.cli <<'EOF'
+          cat > ../../out/RUNA_FC45_PRESET_3G3_CW90_FLIP.cli <<'EOF'
           batch start
 
           feature OSD
@@ -530,19 +528,24 @@ jobs:
 
           set acc_hardware = LSM6DXX
           set baro_hardware = SPL06
-          set mag_hardware = QMC5883
+          set mag_hardware = NONE
 
-          # Axis fix
+          # For this test keep board alignment zero.
+          # If axes are rotated, try yaw 900/1800/2700 after checking drift.
           set align_board_roll = 0
           set align_board_pitch = 0
-          set align_board_yaw = 900
+          set align_board_yaw = 0
+
+          set gyro_zero_x = 0
+          set gyro_zero_y = 0
+          set gyro_zero_z = 0
 
           set acczero_x = 0
-          set acczero_y = -2
-          set acczero_z = 20
-          set accgain_x = 4091
-          set accgain_y = 4093
-          set accgain_z = 4094
+          set acczero_y = 0
+          set acczero_z = 0
+          set accgain_x = 4096
+          set accgain_y = 4096
+          set accgain_z = 4096
 
           set vbat_adc_channel = 1
           set rssi_adc_channel = 3
@@ -551,11 +554,6 @@ jobs:
 
           set receiver_type = SERIAL
           set serialrx_provider = CRSF
-
-          set align_mag = CW0FLIP
-          set align_mag_roll = 0
-          set align_mag_pitch = 0
-          set align_mag_yaw = 0
 
           set vtx_frequency_group = FREQUENCYGROUP_1G3
           set vtx_band = 1
@@ -581,20 +579,22 @@ jobs:
           save
           EOF
 
-          cat > ../../out/README_RUNA_FC45_FIXED_IMU.txt <<'EOF'
-          RUNA FC45 FIXED IMU BUILD
+          cat > ../../out/README_RUNA_FC45_CW90_FLIP.txt <<'EOF'
+          RUNA FC45 CW90_DEG_FLIP BUILD
 
           Base:
           - INAV 7.1.2
           - BASE_TARGET: SPEEDYBEEF405WING
           - NEW TARGET: CADDXF405_WING
 
+          IMU test:
+          - IMU_LSM6DXX_ALIGN = CW90_DEG_FLIP
+
           Added:
           - CADDXF405+RUNA name
           - startup text: version RUNA 1.0
           - LSM6DXX / SPL06 / QMC5883 target patch
-          - safer LSM6DXX detection
-          - IMU alignment: CW90_DEG
+          - safe LSM6DXX detection
           - RUNA OSD shutter on Layout 2
           - VTX 3.3GHz table in FREQUENCYGROUP_1G3
           - 5.8GHz and 3.3GHz CLI presets
@@ -608,34 +608,53 @@ jobs:
              defaults
              save
 
-          3. Check:
-             version
-             status
+          3. After reboot, do not touch the board for 15 seconds.
 
-          Sensors should show:
-          - GYRO available
-          - ACC available
-          - BARO SPL06
-          - MAG QMC5883/HMC5883 if compass connected
+          4. Open CLI and paste:
+             set mag_hardware = NONE
+             set align_board_roll = 0
+             set align_board_pitch = 0
+             set align_board_yaw = 0
+             set gyro_zero_x = 0
+             set gyro_zero_y = 0
+             set gyro_zero_z = 0
+             set acczero_x = 0
+             set acczero_y = 0
+             set acczero_z = 0
+             set accgain_x = 4096
+             set accgain_y = 4096
+             set accgain_z = 4096
+             save
 
-          Setup movement must be:
+          5. After reboot, do not touch the board for 15 seconds.
+          6. Calibrate accelerometer.
+          7. Check Setup.
+
+          Desired Setup movement:
           - right wing down -> model right wing down
           - left wing down -> model left wing down
           - nose up -> model nose up
           - nose down -> model nose down
+          - model must NOT slowly drift/turn by itself
 
-          If movement is still rotated:
+          If model is rotated but no slow drift:
           Try CLI:
+             set align_board_yaw = 900
+             save
+
+          If still rotated:
+             set align_board_yaw = 1800
+             save
+
+          If still rotated:
              set align_board_yaw = 2700
              save
 
-          If still wrong:
-          rebuild with:
-             IMU_ALIGN: CW270_DEG
-
-          If model spins many rotations from tiny movement:
-          Do not fly.
-          The IMU detect/axis is still wrong.
+          If model still slowly drifts:
+          Do not fly. Next build should test:
+          - CW270_DEG_FLIP
+          - CW0_DEG_FLIP
+          - CW180_DEG_FLIP
           EOF
 
           ls -la ../../out
@@ -644,5 +663,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-FIXED-IMU
+          name: RUNA-FC45-CW90-FLIP
           path: out/*
