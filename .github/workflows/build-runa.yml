@@ -1,4 +1,4 @@
-name: Build CADDXF4 RUNA Firmware
+name: Build CADDXF4 RUNA Firmware INAV 8
 
 on:
   workflow_dispatch:
@@ -11,6 +11,7 @@ jobs:
     env:
       TARGET: CADDXF4_AIO_ELRS
       RUNA_NAME: CADDXF4_AIO+RUNA
+      INAV_VERSION: 8.0.1
 
     steps:
       - name: Install deps
@@ -31,10 +32,11 @@ jobs:
             python3 \
             python3-pip
 
-      - name: Clone INAV 7.1.2
+      - name: Clone INAV 8.0.1
         run: |
-          git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git
+          git clone --branch ${INAV_VERSION} --depth 1 https://github.com/iNavFlight/inav.git
           cd inav
+          echo "Current INAV version: ${INAV_VERSION}"
           echo "Current commit:"
           git rev-parse HEAD
 
@@ -46,6 +48,11 @@ jobs:
           from pathlib import Path
 
           path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("ERROR: src/main/io/osd.c not found")
+              raise SystemExit(1)
+
           text = path.read_text(encoding="utf-8")
 
           old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
@@ -60,7 +67,8 @@ jobs:
               )
               print("Startup text patched: RUNAv.1")
           else:
-              print("WARNING: startup text pattern not found")
+              print("WARNING: startup text pattern not found in INAV 8")
+              print("Build will continue without startup text patch")
 
           path.write_text(text, encoding="utf-8")
           PY
@@ -74,6 +82,11 @@ jobs:
           import re
 
           path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("ERROR: src/main/io/osd.c not found")
+              raise SystemExit(1)
+
           text = path.read_text(encoding="utf-8")
 
           pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
@@ -154,7 +167,8 @@ jobs:
           new_text, count = re.subn(pattern, replacement, text, count=1)
 
           if count != 1:
-              print("ERROR: OSD draw block not found")
+              print("ERROR: OSD draw block not found in INAV 8")
+              print("This means osd.c changed. Need manual patch for INAV 8.")
               raise SystemExit(1)
 
           path.write_text(new_text, encoding="utf-8")
@@ -253,12 +267,18 @@ jobs:
         run: |
           cd inav/build
           echo "Checking target: ${TARGET}"
-          make help | grep "${TARGET}" || {
+
+          if make help | grep -w "${TARGET}"; then
+            echo "Target found: ${TARGET}"
+          else
             echo "TARGET NOT FOUND: ${TARGET}"
-            echo "Available CADDX/CAD/CADDY targets:"
+            echo ""
+            echo "Available CADDX/CAD/CADDY/XF405/F405 targets:"
             make help | grep -i -E "CAD|CADD|CADDX|CADDY|XF405|F405" || true
+            echo ""
+            echo "If your target has another name in INAV 8, replace TARGET at the top of this workflow."
             exit 1
-          }
+          fi
 
       - name: Build CADDXF4 AIO ELRS
         run: |
@@ -381,7 +401,7 @@ jobs:
               else:
                   patched_lines.append(line)
 
-          dst = out / "CADDXF4_RUNA.hex"
+          dst = out / "CADDXF4_RUNA_INAV8.hex"
           dst.write_text("\n".join(patched_lines) + "\n")
           print("patched HEX written:", dst)
           PY
@@ -390,7 +410,7 @@ jobs:
         run: |
           mkdir -p out
 
-          cat > out/RUNA_PRESET_5G8.cli <<'EOF'
+          cat > out/RUNA_PRESET_5G8_INAV8.cli <<'EOF'
           batch start
 
           feature OSD
@@ -426,7 +446,7 @@ jobs:
           save
           EOF
 
-          cat > out/RUNA_PRESET_3G3.cli <<'EOF'
+          cat > out/RUNA_PRESET_3G3_INAV8.cli <<'EOF'
           batch start
 
           feature OSD
@@ -463,8 +483,8 @@ jobs:
           save
           EOF
 
-          cat > out/README_RUNA.txt <<'EOF'
-          RUNA CADDXF4 AIO ELRS
+          cat > out/README_RUNA_INAV8.txt <<'EOF'
+          RUNA CADDXF4 AIO ELRS - INAV 8.0.1
 
           Added:
           - CADDXF4_AIO+RUNA name
@@ -474,20 +494,29 @@ jobs:
           - VTX 3.3GHz table in FREQUENCYGROUP_1G3
           - AUX4 / CH8 for OSD shutter/layout 2
 
+          Important:
+          - Use INAV Configurator 8.x.
+          - Do not use INAV Configurator 7.x or 9.x with this firmware.
+          - After flashing INAV 8, use Full Chip Erase.
+          - Reconfigure carefully, do not blindly restore old INAV 7 dump.
+
           After flashing:
           1. Test without propeller.
           2. Check status.
-          3. Check Setup movement.
-          4. Apply one preset:
-             RUNA_PRESET_5G8.cli
+          3. Check receiver movement.
+          4. Check Setup model movement.
+          5. Check ports.
+          6. Check motors/outputs without propeller.
+          7. Apply only one preset:
+             RUNA_PRESET_5G8_INAV8.cli
              or
-             RUNA_PRESET_3G3.cli
+             RUNA_PRESET_3G3_INAV8.cli
 
-          If sensors or model movement are wrong, do not fly.
+          If sensors, receiver, ports, or model movement are wrong, do not fly.
           EOF
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: CADDXF4-RUNA-Firmware
+          name: CADDXF4-RUNA-INAV8-Firmware
           path: out/*
