@@ -36,7 +36,31 @@ jobs:
 
       - name: Clone INAV 8.0.1
         run: |
-          git clone --branch ${INAV_VERSION} --depth 1 https://github.com/iNavFlight/inav.git
+          set -e
+
+          echo "Cloning INAV ${INAV_VERSION} with retries..."
+
+          for i in 1 2 3 4 5; do
+            echo "Clone attempt $i..."
+
+            git clone \
+              --branch ${INAV_VERSION} \
+              --depth 1 \
+              --single-branch \
+              --config http.version=HTTP/1.1 \
+              --config http.postBuffer=524288000 \
+              https://github.com/iNavFlight/inav.git && break
+
+            echo "Clone failed, retrying in 10 seconds..."
+            rm -rf inav
+            sleep 10
+          done
+
+          if [ ! -d "inav" ]; then
+            echo "ERROR: INAV clone failed after retries"
+            exit 1
+          fi
+
           cd inav
           echo "INAV version: ${INAV_VERSION}"
           echo "Commit:"
@@ -58,6 +82,8 @@ jobs:
             echo "Target found: ${TARGET}"
           else
             echo "TARGET NOT FOUND: ${TARGET}"
+            echo ""
+            echo "Available similar targets:"
             make help | grep -i -E "SPEEDYBEE|F405|WING" || true
             exit 1
           fi
