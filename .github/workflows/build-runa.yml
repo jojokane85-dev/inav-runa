@@ -1,4 +1,4 @@
-name: Build RUNA FC45 SWAP XY REVERSE
+name: Build RUNA FC45 FULL SOURCE
 
 on:
   workflow_dispatch:
@@ -17,19 +17,9 @@ jobs:
         run: |
           sudo apt-get update -y -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends \
-            git \
-            build-essential \
-            g++ \
-            ruby \
-            cmake \
-            make \
-            gcc-arm-none-eabi \
-            binutils-arm-none-eabi \
-            libnewlib-arm-none-eabi \
-            libstdc++-arm-none-eabi-dev \
-            ninja-build \
-            python3 \
-            python3-pip
+            git build-essential g++ ruby cmake make \
+            gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-dev ninja-build python3 python3-pip
 
       - name: Clone INAV 7.1.2
         run: |
@@ -40,139 +30,103 @@ jobs:
       - name: Create CADDXF405_WING target
         run: |
           cd inav
-
           rm -rf src/main/target/${TARGET}
           cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
-
           sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
-
-          echo "Created target:"
           cat src/main/target/${TARGET}/CMakeLists.txt
 
-      - name: Patch target to LSM6DXX CW0
+      - name: Patch target to CADDXF405_WING LSM6DXX
         run: |
           cd inav
-
           python3 <<'PY'
           from pathlib import Path
-          import os
-          import re
+          import os, re
 
           target = os.environ["TARGET"]
           path = Path(f"src/main/target/{target}/target.h")
           text = path.read_text(encoding="utf-8")
 
           remove_patterns = [
-              r'//\s*ICM42605/ICM42688P\s*',
               r'#define\s+USE_IMU_ICM42605\s*',
               r'#define\s+IMU_ICM42605_ALIGN\s+\S+\s*',
               r'#define\s+ICM42605_CS_PIN\s+\S+\s*',
               r'#define\s+ICM42605_SPI_BUS\s+\S+\s*',
-
               r'#define\s+USE_IMU_ICM42688P\s*',
               r'#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*',
               r'#define\s+ICM42688P_CS_PIN\s+\S+\s*',
               r'#define\s+ICM42688P_SPI_BUS\s+\S+\s*',
-
               r'#define\s+USE_IMU_LSM6DXX\s*',
               r'#define\s+LSM6DXX_SPI_BUS\s+\S+\s*',
               r'#define\s+LSM6DXX_CS_PIN\s+\S+\s*',
               r'#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*',
           ]
-
-          for pattern in remove_patterns:
-              text = re.sub(pattern, "", text, flags=re.M)
+          for p in remove_patterns:
+              text = re.sub(p, "", text, flags=re.M)
 
           text += """
 
           /*
-           * RUNA CADDXF405_WING FC 4.5
-           *
-           * Manual axis patch is inside accgyro_lsm6dxx.c
-           *
-           * PA4 = MPU CS
-           * PA5 = SPI1 SCK
-           * PA6 = SPI1 MISO
-           * PA7 = SPI1 MOSI
+           * RUNA CADDXF405_WING FC4.5
+           * Working board:
+           * GYRO=LSM6DXX, ACC=LSM6DXX, BARO=SPL06, MAG=QMC5883
+           * PA4 = MPU CS, PA5/PA6/PA7 = SPI1
            */
           #define USE_IMU_LSM6DXX
           #define LSM6DXX_SPI_BUS BUS_SPI1
           #define LSM6DXX_CS_PIN PA4
           #define IMU_LSM6DXX_ALIGN CW0_DEG
+
+          #define USE_MAG_QMC5883
+          #define USE_MAG_HMC5883
+          #define MAG_I2C_BUS BUS_I2C1
+
+          #define USE_BARO_SPL06
+          #define BARO_I2C_BUS BUS_I2C1
           """
 
           path.write_text(text, encoding="utf-8")
-
-          check = path.read_text(encoding="utf-8")
-
-          required = [
-              "USE_IMU_LSM6DXX",
-              "LSM6DXX_SPI_BUS BUS_SPI1",
-              "LSM6DXX_CS_PIN PA4",
-              "IMU_LSM6DXX_ALIGN CW0_DEG",
-          ]
-
-          for item in required:
-              if item not in check:
-                  print("ERROR missing:", item)
-                  raise SystemExit(1)
-
-          print("Target patched OK")
+          print("RUNA target.h patched")
           PY
+          grep -n -E "LSM6|QMC|HMC|SPL06|PA4|SPI1|CW0" src/main/target/${TARGET}/target.h || true
 
-          grep -n -E "LSM6|IMU|PA4|SPI1|CW0" src/main/target/${TARGET}/target.h || true
-
-      - name: Patch LSM6DXX FORCE DETECT and SWAP XY REVERSE
+      - name: Patch LSM6DXX robust detect
         run: |
           cd inav
-
           python3 <<'PY'
           from pathlib import Path
 
           path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
           text = path.read_text(encoding="utf-8")
 
-          def replace_function(source, signature, replacement):
-              start = source.find(signature)
-              if start == -1:
-                  print("ERROR: function not found:", signature)
-                  raise SystemExit(1)
+          sig = "static bool lsm6dxxDetect"
+          start = text.find(sig)
+          if start == -1:
+              raise SystemExit("lsm6dxxDetect not found")
 
-              brace_start = source.find("{", start)
-              if brace_start == -1:
-                  print("ERROR: opening brace not found:", signature)
-                  raise SystemExit(1)
+          brace = text.find("{", start)
+          depth = 0
+          end = -1
+          for i in range(brace, len(text)):
+              if text[i] == "{":
+                  depth += 1
+              elif text[i] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+          if end == -1:
+              raise SystemExit("lsm6dxxDetect end not found")
 
-              depth = 0
-              end = -1
-
-              for i in range(brace_start, len(source)):
-                  if source[i] == "{":
-                      depth += 1
-                  elif source[i] == "}":
-                      depth -= 1
-                      if depth == 0:
-                          end = i + 1
-                          break
-
-              if end == -1:
-                  print("ERROR: closing brace not found:", signature)
-                  raise SystemExit(1)
-
-              return source[:start] + replacement + source[end:]
-
-          detect_replacement = r'''static bool lsm6dxxDetect(busDevice_t * dev)
+          repl = """static bool lsm6dxxDetect(busDevice_t * dev)
           {
               uint8_t tmp = 0;
 
               busSetSpeed(dev, BUS_SPEED_INITIALIZATION);
               delay(150);
-
               busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);
 
               /*
-               * RUNA FC45 FORCE DETECT
-               * Accept known LSM6DXX IDs, otherwise force LSM6DS3.
+               * RUNA FC45 robust LSM6DXX detection.
                */
               if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
                   lsm6dID = tmp;
@@ -181,151 +135,33 @@ jobs:
               }
 
               return true;
-          }'''
-
-          acc_replacement = r'''static bool lsm6dxxAccRead(accDev_t *acc)
-          {
-              uint8_t data[6];
-
-              const bool ack = busReadBuf(acc->busDev, LSM6DXX_REG_OUTX_L_A, data, 6);
-
-              if (!ack) {
-                  return false;
-              }
-
-              const float runaRawX = (float) int16_val_little_endian(data, 0);
-              const float runaRawY = (float) int16_val_little_endian(data, 1);
-              const float runaRawZ = (float) int16_val_little_endian(data, 2);
-
-              /*
-               * RUNA FC45 manual ACC axis correction REVERSE.
-               *
-               * Fix:
-               * X =  Y
-               * Y = -X
-               * Z =  Z
-               */
-              acc->ADCRaw[X] =  runaRawY;
-              acc->ADCRaw[Y] = -runaRawX;
-              acc->ADCRaw[Z] =  runaRawZ;
-
-              return true;
-          }'''
-
-          gyro_replacement = r'''static bool lsm6dxxGyroRead(gyroDev_t *gyro)
-          {
-              uint8_t data[6];
-
-              const bool ack = busReadBuf(gyro->busDev, LSM6DXX_REG_OUTX_L_G, data, 6);
-
-              if (!ack) {
-                  return false;
-              }
-
-              const float runaGyroX = (float) int16_val_little_endian(data, 0);
-              const float runaGyroY = (float) int16_val_little_endian(data, 1);
-              const float runaGyroZ = (float) int16_val_little_endian(data, 2);
-
-              /*
-               * RUNA FC45 manual GYRO axis correction REVERSE.
-               *
-               * Fix:
-               * X =  Y
-               * Y = -X
-               * Z =  Z
-               */
-              gyro->gyroADCRaw[X] =  runaGyroY;
-              gyro->gyroADCRaw[Y] = -runaGyroX;
-              gyro->gyroADCRaw[Z] =  runaGyroZ;
-
-              return true;
-          }'''
-
-          text = replace_function(text, "static bool lsm6dxxDetect", detect_replacement)
-          text = replace_function(text, "static bool lsm6dxxAccRead", acc_replacement)
-          text = replace_function(text, "static bool lsm6dxxGyroRead", gyro_replacement)
-
+          }"""
+          text = text[:start] + repl + text[end:]
           path.write_text(text, encoding="utf-8")
-
-          print("RUNA FORCE DETECT patched")
-          print("RUNA SWAP XY REVERSE patched")
+          print("RUNA LSM6DXX detect patched")
           PY
 
-          echo "==== CHECK RUNA PATCH ===="
-          grep -n -A35 -B5 "RUNA FC45" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
-
-      - name: Patch defaults
+      - name: Patch RUNA name and startup text
         run: |
           cd inav
-
           python3 <<'PY'
           from pathlib import Path
           import re
 
-          path = Path("src/main/fc/settings.yaml")
-          text = path.read_text(encoding="utf-8")
-
-          def patch_setting(text, name, value):
-              pattern = rf"(-\s+name:\s*{re.escape(name)}\b(?:(?!\n\s*-\s+name:).)*?default_value:\s*)([^\n\r]+)"
-
-              def repl(m):
-                  print(f"{name}: {m.group(2).strip()} -> {value}")
-                  return m.group(1) + str(value)
-
-              new_text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
-
-              if count != 1:
-                  print(f"WARNING: {name} not found")
-
-              return new_text
-
-          text = patch_setting(text, "acc_hardware", "LSM6DXX")
-          text = patch_setting(text, "rssi_adc_channel", "3")
-          text = patch_setting(text, "current_adc_channel", "2")
-          text = patch_setting(text, "airspeed_adc_channel", "4")
-
-          path.write_text(text, encoding="utf-8")
-          PY
-
-      - name: Patch RUNA name
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("src/main/fc/fc_msp.c")
-          text = path.read_text(encoding="utf-8")
-
-          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
-
-          replacement = '''const char *runaTargetName = "CADDXF405_WING+RUNA";
+          p = Path("src/main/fc/fc_msp.c")
+          text = p.read_text(encoding="utf-8")
+          pat = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
+          rep = """const char *runaTargetName = "CADDXF405+RUNA";
                   sbufWriteU8(dst, strlen(runaTargetName));
-                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));'''
+                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));"""
+          text, c = re.subn(pat, rep, text, count=1)
+          p.write_text(text, encoding="utf-8")
+          print("MSP name patch count:", c)
 
-          new_text, count = re.subn(pattern, replacement, text, count=1)
-
-          if count == 1:
-              path.write_text(new_text, encoding="utf-8")
-              print("RUNA name patched")
-          else:
-              print("WARNING: RUNA name patch not found")
-          PY
-
-      - name: Patch startup text
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/main/io/osd.c")
-          text = path.read_text(encoding="utf-8")
-
+          p = Path("src/main/io/osd.c")
+          text = p.read_text(encoding="utf-8")
           old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
           new = 'tfp_sprintf(string_buffer, "version RUNA 1.0");'
-
           if old in text:
               text = text.replace(old, new, 1)
               text = text.replace(
@@ -333,16 +169,12 @@ jobs:
                   'uint8_t xPos = OSD_CENTER_S(string_buffer);',
                   1
               )
-              path.write_text(text, encoding="utf-8")
-              print("Startup text patched")
-          else:
-              print("WARNING: startup text line not found")
+          p.write_text(text, encoding="utf-8")
           PY
 
       - name: Patch RUNA OSD shutter
         run: |
           cd inav
-
           python3 <<'PY'
           from pathlib import Path
           import re
@@ -352,7 +184,7 @@ jobs:
 
           pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
 
-          replacement = r'''
+          replacement = r"""
                   static bool runaShutterWasActive = false;
                   static uint8_t runaShutterNextRow = 0;
 
@@ -423,16 +255,53 @@ jobs:
                   }
 
                   displayHeartbeat(osdDisplayPort);
-                  displayCommitTransaction(osdDisplayPort);'''
+                  displayCommitTransaction(osdDisplayPort);"""
 
           new_text, count = re.subn(pattern, replacement, text, count=1)
-
           if count != 1:
-              print("ERROR: OSD draw block not found")
-              raise SystemExit(1)
+              raise SystemExit("OSD draw block not found")
 
           path.write_text(new_text, encoding="utf-8")
           print("RUNA OSD shutter patched")
+          PY
+
+      - name: Patch VTX 3.3GHz table
+        run: |
+          cd inav
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/vtx_string.c")
+          if not path.exists():
+              print("vtx_string.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          def sub(text, pattern, repl, name, flags=0):
+              new, count = re.subn(pattern, repl, text, count=1, flags=flags)
+              print(name, "patch count:", count)
+              return new if count else text
+
+          text = sub(text, r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
+                     "#define VTX_STRING_1G3_BAND_COUNT 6", "band count")
+          text = sub(text, r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
+                     "#define VTX_STRING_1G3_POWER_COUNT 5", "power count")
+
+          text = sub(text,
+              r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
+              """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
+              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
+              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
+              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
+              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
+              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
+              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
+          };""",
+              "3.3 table", flags=re.S)
+
+          path.write_text(text, encoding="utf-8")
           PY
 
       - name: Configure CMake
@@ -445,22 +314,19 @@ jobs:
       - name: Build firmware
         run: |
           cd inav/build
-
           make clean_${TARGET} || true
           make ${TARGET} -j2 VERBOSE=1
 
-      - name: Collect firmware
+      - name: Collect firmware and presets
         if: success()
         run: |
           mkdir -p out
-
           cd inav/build
 
           FOUND=0
-
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="../../out/RUNA_FC45_SWAP_XY_REVERSE_${base}"
+            dst="../../out/RUNA_FC45_FULL_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -472,46 +338,156 @@ jobs:
             exit 1
           fi
 
-          cat > ../../out/README_RUNA_FC45_SWAP_XY_REVERSE.txt <<EOF
-          RUNA FC45 CADDXF405_WING SWAP XY REVERSE
+          cat > ../../out/RUNA_FC45_PRESET_5G8.cli <<'EOF'
+          batch start
+          feature OSD
+          feature VTX
+          feature TELEMETRY
+          feature CURRENT_METER
+          feature BLACKBOX
+          feature PWM_OUTPUT_ENABLE
 
-          Manual axis correction:
-          X =  Y
-          Y = -X
-          Z =  Z
+          set acc_hardware = LSM6DXX
+          set baro_hardware = SPL06
+          set mag_hardware = QMC5883
 
-          After flashing:
-          defaults
-          save
-
-          Then:
           set align_board_roll = 0
           set align_board_pitch = 0
-          set align_board_yaw = 0
-          save
+          set align_board_yaw = 1800
 
-          If ACC flag appears:
           set acczero_x = 0
           set acczero_y = -2
           set acczero_z = 20
           set accgain_x = 4091
           set accgain_y = 4093
           set accgain_z = 4094
-          save
 
-          Correct movement:
-          left  = left
-          right = right
-          up    = up
-          down  = down
+          set vbat_adc_channel = 1
+          set rssi_adc_channel = 3
+          set current_adc_channel = 2
+          set airspeed_adc_channel = 4
+
+          set receiver_type = SERIAL
+          set serialrx_provider = CRSF
+
+          set align_mag = CW0FLIP
+          set align_mag_roll = 0
+          set align_mag_pitch = 0
+          set align_mag_yaw = 0
+
+          set vtx_frequency_group = FREQUENCYGROUP_5G8
+          set vtx_band = 1
+          set vtx_channel = 1
+          set vtx_power = 1
+          set vtx_low_power_disarm = OFF
+          set vtx_halfduplex = ON
+          set vtx_smartaudio_early_akk_workaround = ON
+          set vtx_smartaudio_alternate_softserial_method = ON
+          set vtx_smartaudio_stopbits = 2
+
+          aux 20 33 3 1300 1700
+          aux 21 34 3 1700 2100
+
+          set pinio_box1 = 47
+          set pinio_box2 = 255
+          set pinio_box3 = 57
+          set pinio_box4 = 255
+          save
           EOF
 
-          echo "Final files:"
+          cat > ../../out/RUNA_FC45_PRESET_3G3.cli <<'EOF'
+          batch start
+          feature OSD
+          feature VTX
+          feature TELEMETRY
+          feature CURRENT_METER
+          feature BLACKBOX
+          feature PWM_OUTPUT_ENABLE
+
+          set acc_hardware = LSM6DXX
+          set baro_hardware = SPL06
+          set mag_hardware = QMC5883
+
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 1800
+
+          set acczero_x = 0
+          set acczero_y = -2
+          set acczero_z = 20
+          set accgain_x = 4091
+          set accgain_y = 4093
+          set accgain_z = 4094
+
+          set vbat_adc_channel = 1
+          set rssi_adc_channel = 3
+          set current_adc_channel = 2
+          set airspeed_adc_channel = 4
+
+          set receiver_type = SERIAL
+          set serialrx_provider = CRSF
+
+          set align_mag = CW0FLIP
+          set align_mag_roll = 0
+          set align_mag_pitch = 0
+          set align_mag_yaw = 0
+
+          set vtx_frequency_group = FREQUENCYGROUP_1G3
+          set vtx_band = 1
+          set vtx_channel = 1
+          set vtx_power = 5
+          set vtx_low_power_disarm = OFF
+          set vtx_halfduplex = ON
+          set vtx_smartaudio_early_akk_workaround = ON
+          set vtx_smartaudio_alternate_softserial_method = ON
+          set vtx_smartaudio_stopbits = 2
+
+          aux 20 33 3 1300 1700
+          aux 21 34 3 1700 2100
+
+          set pinio_box1 = 47
+          set pinio_box2 = 255
+          set pinio_box3 = 57
+          set pinio_box4 = 255
+          save
+          EOF
+
+          cat > ../../out/README_RUNA_FC45_FULL.txt <<'EOF'
+          RUNA FC45 FULL SOURCE BUILD
+
+          Added:
+          - CADDXF405+RUNA name
+          - startup text: version RUNA 1.0
+          - LSM6DXX / SPL06 / QMC5883 target patch
+          - RUNA OSD shutter on layout 2
+          - VTX 3.3GHz table in FREQUENCYGROUP_1G3
+          - 5.8GHz and 3.3GHz CLI presets
+
+          IMPORTANT:
+          This is an experimental source-built firmware.
+          Test without propeller.
+
+          After flashing:
+          1) Check status:
+             GYRO=OK
+             ACC=OK
+             MAG=OK
+             BARO=OK
+
+          2) Check Setup movement:
+             nose up -> model nose up
+             nose down -> model nose down
+             left wing down -> model left
+             right wing down -> model right
+
+          If axes or sensors are wrong, return to your known-working CADDXF405+RUNA hex.
+          EOF
+
           ls -la ../../out
 
       - name: Upload firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-CADDXF405-WING-SWAP-XY-REVERSE
+          name: RUNA-FC45-FULL-SOURCE
           path: out/*
