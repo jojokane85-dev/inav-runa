@@ -1,7 +1,8 @@
-name: Build STOCK CADDXF4 INAV 8
+name: Build JHEMCUF405WING RUNA INAV 8
 
 on:
   workflow_dispatch:
+  push:
 
 jobs:
   build:
@@ -9,7 +10,15 @@ jobs:
 
     env:
       INAV_VERSION: 8.0.1
-      TARGET: CADDXF4_AIO_ELRS
+
+      # Пробный WING target, похожий на CADDXF405_WING
+      TARGET: JHEMCUF405WING
+
+      # ВАЖНО: длина OLD и NEW должна быть одинаковой
+      # JHEMCUF405WING = 13 символов
+      # JHEMCUF405+RUNA = 13 символов
+      OLD_TARGET_NAME: JHEMCUF405WING
+      NEW_TARGET_NAME: JHEMCUF405+RUNA
 
     steps:
       - name: Install deps
@@ -34,6 +43,8 @@ jobs:
         run: |
           git clone --branch ${INAV_VERSION} --depth 1 https://github.com/iNavFlight/inav.git
           cd inav
+          echo "INAV version: ${INAV_VERSION}"
+          echo "Commit:"
           git rev-parse HEAD
 
       - name: Configure CMake
@@ -43,30 +54,528 @@ jobs:
           cd build
           cmake ..
 
-      - name: Check target
+      - name: Check target exists
         run: |
           cd inav/build
-          make help | grep -w "${TARGET}" || {
-            echo "Target not found: ${TARGET}"
-            exit 1
-          }
+          echo "Checking target: ${TARGET}"
 
-      - name: Build STOCK firmware
+          if make help | grep -w "${TARGET}"; then
+            echo "Target found: ${TARGET}"
+          else
+            echo "TARGET NOT FOUND: ${TARGET}"
+            echo ""
+            echo "Available WING/F405 targets:"
+            make help | grep -i -E "WING|F405|JHE|SKYSTARS|SPEEDYBEE|CADDX|CADDY" || true
+            exit 1
+          fi
+
+      - name: Patch startup text RUNAv.1
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("ERROR: src/main/io/osd.c not found")
+              raise SystemExit(1)
+
+          text = path.read_text(encoding="utf-8")
+
+          variants = [
+              'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);',
+              'tfp_sprintf(string_buffer, "INAV VERSION: %s", flightControllerVersion);',
+          ]
+
+          patched = False
+
+          for old in variants:
+              if old in text:
+                  text = text.replace(old, 'tfp_sprintf(string_buffer, "RUNAv.1");', 1)
+                  patched = True
+                  print("Startup text patched by direct string")
+                  break
+
+          if not patched:
+              pattern = r'tfp_sprintf\s*\(\s*string_buffer\s*,\s*"INAV VERSION:[^"]*"\s*,\s*[^;]+?\);'
+              new_text, count = re.subn(
+                  pattern,
+                  'tfp_sprintf(string_buffer, "RUNAv.1");',
+                  text,
+                  count=1
+              )
+              if count:
+                  text = new_text
+                  patched = True
+                  print("Startup text patched by regex")
+
+          text = text.replace(
+              'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
+              'uint8_t xPos = OSD_CENTER_S(string_buffer);',
+              1
+          )
+
+          if not patched:
+              print("WARNING: startup text pattern not found")
+              print("Build will continue, but RUNAv.1 startup text may not be patched")
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Patch RUNA OSD shutter
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("ERROR: src/main/io/osd.c not found")
+              raise SystemExit(1)
+
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
+
+          replacement = r'''
+                  static bool runaShutterWasActive = false;
+                  static uint8_t runaShutterNextRow = 0;
+
+                  if (currentLayout == 2) {
+                      textAttributes_t runaAttr = TEXT_ATTRIBUTES_NONE;
+                      TEXT_ATTRIBUTES_ADD_SOLID_BG(runaAttr);
+
+                      char runaMask[64];
+
+                      uint8_t cols = osdDisplayPort->cols;
+                      uint8_t rows = osdDisplayPort->rows;
+
+                      if (cols > 63) {
+                          cols = 63;
+                      }
+
+                      const uint8_t windowWidth = cols >= 30 ? 10 : cols / 3;
+                      const uint8_t windowHeight = rows >= 16 ? 4 : rows / 3;
+
+                      const uint8_t windowX = (cols - windowWidth) / 2;
+                      const uint8_t windowY = (rows - windowHeight) / 2;
+
+                      if (!runaShutterWasActive) {
+                          displayClearScreen(osdDisplayPort);
+                          runaShutterWasActive = true;
+                          runaShutterNextRow = 0;
+                      }
+
+                      for (uint8_t pass = 0; pass < 2; pass++) {
+                          uint8_t y = runaShutterNextRow;
+
+                          const bool inWindowY = (y >= windowY) && (y < windowY + windowHeight);
+
+                          if (!inWindowY) {
+                              memset(runaMask, ' ', cols);
+                              runaMask[cols] = '\0';
+                              displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
+                          } else {
+                              if (windowX > 0) {
+                                  memset(runaMask, ' ', windowX);
+                                  runaMask[windowX] = '\0';
+                                  displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
+                              }
+
+                              const uint8_t rightX = windowX + windowWidth;
+                              if (rightX < cols) {
+                                  const uint8_t rightWidth = cols - rightX;
+                                  memset(runaMask, ' ', rightWidth);
+                                  runaMask[rightWidth] = '\0';
+                                  displayWriteWithAttr(osdDisplayPort, rightX, y, runaMask, runaAttr);
+                              }
+                          }
+
+                          runaShutterNextRow++;
+
+                          if (runaShutterNextRow >= rows) {
+                              runaShutterNextRow = 0;
+                          }
+                      }
+                  } else {
+                      if (runaShutterWasActive) {
+                          displayClearScreen(osdDisplayPort);
+                          runaShutterWasActive = false;
+                          runaShutterNextRow = 0;
+                      }
+
+                      osdDrawNextElement();
+                  }
+
+                  displayHeartbeat(osdDisplayPort);
+                  displayCommitTransaction(osdDisplayPort);'''
+
+          new_text, count = re.subn(pattern, replacement, text, count=1)
+
+          if count != 1:
+              print("ERROR: OSD draw block not found")
+              print("INAV 8 osd.c structure may be different")
+              raise SystemExit(1)
+
+          path.write_text(new_text, encoding="utf-8")
+          print("RUNA OSD shutter patched on Layout 2")
+          PY
+
+      - name: Patch VTX 3.3 GHz table
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/vtx_string.c")
+
+          if not path.exists():
+              print("WARNING: src/main/io/vtx_string.c not found, skip VTX table patch")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          def sub_once(text, pattern, repl, name, flags=0):
+              new_text, count = re.subn(pattern, repl, text, count=1, flags=flags)
+              print(f"{name}: patch count = {count}")
+              return new_text if count else text
+
+          text = sub_once(
+              text,
+              r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_BAND_COUNT 6",
+              "1G3 band count"
+          )
+
+          text = sub_once(
+              text,
+              r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_POWER_COUNT 5",
+              "1G3 power count"
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
+              """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
+              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
+              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
+              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
+              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
+              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
+              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
+          };""",
+              "3.3GHz frequency table",
+              flags=re.S
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
+              "-", "A", "B", "C", "D", "E", "F",
+          };""",
+              "3.3GHz band names",
+              flags=re.S
+          )
+
+          text = sub_once(
+              text,
+              r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
+              'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
+              "3.3GHz band letters"
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
+              "---", "25", "200", "400", "800", "MAX"
+          };""",
+              "3.3GHz power names",
+              flags=re.S
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("RUNA VTX 3.3 table patch finished")
+          PY
+
+      - name: Build firmware
         run: |
           cd inav/build
           make clean_${TARGET} || true
           make ${TARGET} -j$(nproc)
 
-      - name: Collect firmware
+      - name: Find built firmware
+        if: always()
+        run: |
+          echo "Built firmware files:"
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+
+      - name: Patch RUNA name in HEX and collect
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+
+          old = os.environ["OLD_TARGET_NAME"].encode()
+          new = os.environ["NEW_TARGET_NAME"].encode()
+
+          if len(old) != len(new):
+              raise SystemExit(f"Length mismatch: old={len(old)} new={len(new)}")
+
+          out = Path("out")
+          out.mkdir(exist_ok=True)
+
+          target = os.environ["TARGET"]
+
+          hex_files = list(Path("inav/build").rglob(f"*{target}*.hex"))
+          if not hex_files:
+              hex_files = list(Path("inav/build").rglob("*.hex"))
+
+          if not hex_files:
+              raise SystemExit("No HEX files found")
+
+          src = hex_files[0]
+          print("Using HEX:", src)
+
+          records = []
+          memory = {}
+          base = 0
+
+          def parse_record(line):
+              count = int(line[1:3], 16)
+              addr = int(line[3:7], 16)
+              rectype = int(line[7:9], 16)
+              data = bytes.fromhex(line[9:9 + count * 2])
+              return count, addr, rectype, data
+
+          for line in src.read_text().splitlines():
+              if not line.startswith(":"):
+                  records.append((line, None))
+                  continue
+
+              count, addr, rectype, data = parse_record(line)
+              records.append((line, (count, addr, rectype, data, base)))
+
+              if rectype == 0:
+                  absolute = base + addr
+                  for i, b in enumerate(data):
+                      memory[absolute + i] = b
+              elif rectype == 4:
+                  base = int.from_bytes(data, "big") << 16
+              elif rectype == 2:
+                  base = int.from_bytes(data, "big") << 4
+
+          if not memory:
+              raise SystemExit("No data records found")
+
+          min_addr = min(memory)
+          max_addr = max(memory)
+          image = bytearray([0xFF] * (max_addr - min_addr + 1))
+
+          for addr, b in memory.items():
+              image[addr - min_addr] = b
+
+          positions = []
+          start = 0
+
+          while True:
+              pos = image.find(old, start)
+              if pos < 0:
+                  break
+              positions.append(pos)
+              start = pos + 1
+
+          if not positions:
+              print("WARNING: Target string not found in complete HEX memory image")
+              print("HEX will be copied without +RUNA name patch")
+              dst = out / "JHEMCUF405WING_RUNA_INAV8_UNPATCHED.hex"
+              dst.write_text(src.read_text())
+              raise SystemExit(0)
+
+          for pos in positions:
+              abs_pos = min_addr + pos
+              print("Patch target name at:", hex(abs_pos))
+              for i, b in enumerate(new):
+                  memory[abs_pos + i] = b
+
+          def checksum(record_bytes):
+              return ((~sum(record_bytes) + 1) & 0xFF)
+
+          patched_lines = []
+
+          for line, info in records:
+              if info is None:
+                  patched_lines.append(line)
+                  continue
+
+              count, addr, rectype, data, rec_base = info
+
+              if rectype == 0:
+                  absolute = rec_base + addr
+                  new_data = bytes(memory[absolute + i] for i in range(count))
+
+                  rec = bytearray()
+                  rec.append(count)
+                  rec.append((addr >> 8) & 0xFF)
+                  rec.append(addr & 0xFF)
+                  rec.append(rectype)
+                  rec.extend(new_data)
+                  chk = checksum(rec)
+
+                  patched_lines.append(":" + rec.hex().upper() + f"{chk:02X}")
+              else:
+                  patched_lines.append(line)
+
+          dst = out / "JHEMCUF405_RUNA_INAV8.hex"
+          dst.write_text("\n".join(patched_lines) + "\n")
+          print("patched HEX written:", dst)
+          PY
+
+      - name: Copy original firmware files
         run: |
           mkdir -p out
-          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
-          find inav/build -type f -name "*.hex" -exec cp {} out/ \;
-          find inav/build -type f -name "*.bin" -exec cp {} out/ \;
-          find inav/build -type f -name "*.elf" -exec cp {} out/ \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/ \; || true
+          find inav/build -type f -name "*.elf" -exec cp {} out/ \; || true
 
-      - name: Upload STOCK firmware
+      - name: Create RUNA CLI presets
+        run: |
+          mkdir -p out
+
+          cat > out/RUNA_PRESET_5G8_INAV8.cli <<'EOF'
+          batch start
+
+          feature OSD
+          feature VTX
+          feature TELEMETRY
+          feature CURRENT_METER
+          feature BLACKBOX
+          feature PWM_OUTPUT_ENABLE
+
+          # VTX 5.8GHz
+          set vtx_frequency_group = FREQUENCYGROUP_5G8
+          set vtx_band = 1
+          set vtx_channel = 1
+          set vtx_power = 1
+          set vtx_low_power_disarm = OFF
+          set vtx_halfduplex = ON
+          set vtx_smartaudio_early_akk_workaround = ON
+          set vtx_smartaudio_alternate_softserial_method = ON
+          set vtx_smartaudio_stopbits = 2
+
+          # AUX4 / CH8
+          # MID  = RUNA OSD-штора / layout 2
+          # HIGH = layout 3
+          aux 20 33 3 1300 1700
+          aux 21 34 3 1700 2100
+
+          # RUNA PINIO
+          set pinio_box1 = 47
+          set pinio_box2 = 255
+          set pinio_box3 = 57
+          set pinio_box4 = 255
+
+          save
+          EOF
+
+          cat > out/RUNA_PRESET_3G3_INAV8.cli <<'EOF'
+          batch start
+
+          feature OSD
+          feature VTX
+          feature TELEMETRY
+          feature CURRENT_METER
+          feature BLACKBOX
+          feature PWM_OUTPUT_ENABLE
+
+          # VTX 3.3GHz
+          # Таблица 3.3 вшита в группу FREQUENCYGROUP_1G3
+          set vtx_frequency_group = FREQUENCYGROUP_1G3
+          set vtx_band = 1
+          set vtx_channel = 1
+          set vtx_power = 5
+          set vtx_low_power_disarm = OFF
+          set vtx_halfduplex = ON
+          set vtx_smartaudio_early_akk_workaround = ON
+          set vtx_smartaudio_alternate_softserial_method = ON
+          set vtx_smartaudio_stopbits = 2
+
+          # AUX4 / CH8
+          # MID  = RUNA OSD-штора / layout 2
+          # HIGH = layout 3
+          aux 20 33 3 1300 1700
+          aux 21 34 3 1700 2100
+
+          # RUNA PINIO
+          set pinio_box1 = 47
+          set pinio_box2 = 255
+          set pinio_box3 = 57
+          set pinio_box4 = 255
+
+          save
+          EOF
+
+          cat > out/README_RUNA_INAV8.txt <<'EOF'
+          RUNA JHEMCUF405WING - INAV 8.0.1
+
+          Target:
+          - JHEMCUF405WING
+
+          Added:
+          - JHEMCUF405+RUNA name
+          - RUNAv.1 startup OSD text
+          - RUNA OSD shutter on Layout 2
+          - VTX 5.8GHz preset
+          - VTX 3.3GHz table in FREQUENCYGROUP_1G3
+          - AUX4 / CH8 for OSD shutter/Layout 2
+
+          IMPORTANT:
+          This is a test target similar to CADDXF405_WING.
+          Do not fly until all sensors, ports, receiver, servos and outputs are checked.
+
+          After flashing:
+          1. Use INAV Configurator 8.x.
+          2. Flash with Full Chip Erase.
+          3. Open CLI.
+          4. Type:
+             defaults
+             save
+          5. After reboot, check:
+             version
+             status
+
+          Good status should show:
+          - GYRO available
+          - ACC available
+
+          If you see:
+          - GYRO=UNAVAILABLE
+          - ACC=UNAVAILABLE
+          - HWFAIL
+
+          Do not fly. This target does not match the board.
+
+          Use only one preset:
+          - RUNA_PRESET_5G8_INAV8.cli
+          - RUNA_PRESET_3G3_INAV8.cli
+
+          OSD shutter:
+          - Layout 2 = RUNA shutter
+          - AUX4 / CH8 MID enables Layout 2
+          - AUX4 / CH8 HIGH enables Layout 3
+          EOF
+
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: STOCK-CADDXF4-AIO-ELRS-INAV8
+          name: JHEMCUF405WING-RUNA-INAV8-Firmware
           path: out/*
