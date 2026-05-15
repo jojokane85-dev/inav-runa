@@ -14,11 +14,12 @@ jobs:
       # Пробный WING target, похожий на CADDXF405_WING
       TARGET: JHEMCUF405WING
 
-      # ВАЖНО: длина OLD и NEW должна быть одинаковой
-      # JHEMCUF405WING = 13 символов
-      # JHEMCUF405+RUNA = 13 символов
+      # ВАЖНО:
+      # OLD_TARGET_NAME и NEW_TARGET_NAME должны быть одинаковой длины.
+      # JHEMCUF405WING = 14 символов
+      # JHEMCU405+RUNA = 14 символов
       OLD_TARGET_NAME: JHEMCUF405WING
-      NEW_TARGET_NAME: JHEMCUF405+RUNA
+      NEW_TARGET_NAME: JHEMCU405+RUNA
 
     steps:
       - name: Install deps
@@ -329,6 +330,9 @@ jobs:
           old = os.environ["OLD_TARGET_NAME"].encode()
           new = os.environ["NEW_TARGET_NAME"].encode()
 
+          print("OLD:", os.environ["OLD_TARGET_NAME"], "length:", len(old))
+          print("NEW:", os.environ["NEW_TARGET_NAME"], "length:", len(new))
+
           if len(old) != len(new):
               raise SystemExit(f"Length mismatch: old={len(old)} new={len(new)}")
 
@@ -436,7 +440,7 @@ jobs:
               else:
                   patched_lines.append(line)
 
-          dst = out / "JHEMCUF405_RUNA_INAV8.hex"
+          dst = out / "JHEMCU405_RUNA_INAV8.hex"
           dst.write_text("\n".join(patched_lines) + "\n")
           print("patched HEX written:", dst)
           PY
@@ -446,6 +450,8 @@ jobs:
           mkdir -p out
           find inav/build -type f -name "*.bin" -exec cp {} out/ \; || true
           find inav/build -type f -name "*.elf" -exec cp {} out/ \; || true
+          echo "OUT files:"
+          ls -lah out
 
       - name: Create RUNA CLI presets
         run: |
@@ -530,8 +536,11 @@ jobs:
           Target:
           - JHEMCUF405WING
 
+          Display name after HEX patch:
+          - JHEMCU405+RUNA
+
           Added:
-          - JHEMCUF405+RUNA name
+          - +RUNA name
           - RUNAv.1 startup OSD text
           - RUNA OSD shutter on Layout 2
           - VTX 5.8GHz preset
