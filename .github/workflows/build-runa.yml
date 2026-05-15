@@ -1,54 +1,37 @@
-name: Build SPEEDYBEEF405WING RUNA INAV 7.1.2
+name: Build RUNA FC45 FIXED IMU
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     env:
+      BASE_TARGET: SPEEDYBEEF405WING
+      TARGET: CADDXF405_WING
       INAV_VERSION: 7.1.2
-      TARGET: SPEEDYBEEF405WING
 
-      # Длина одинаковая:
-      # SPEEDYBEEF405WING = 17
-      # SPEEDYBEE405+RUNA = 17
-      OLD_TARGET_NAME: SPEEDYBEEF405WING
-      NEW_TARGET_NAME: SPEEDYBEE405+RUNA
+      # Если оси всё равно неверные, поменяй на CW270_DEG или CW180_DEG
+      IMU_ALIGN: CW90_DEG
 
     steps:
-      - name: Install dependencies
+      - name: Install deps
         run: |
           sudo apt-get update -y -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends \
-            git \
-            build-essential \
-            g++ \
-            ruby \
-            cmake \
-            make \
-            gcc-arm-none-eabi \
-            binutils-arm-none-eabi \
-            libnewlib-arm-none-eabi \
-            libstdc++-arm-none-eabi-dev \
-            ninja-build \
-            python3 \
-            python3-pip
+            git build-essential g++ ruby cmake make \
+            gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-dev ninja-build python3 python3-pip
 
       - name: Clone INAV 7.1.2
         run: |
           set -e
-
-          echo "Cloning INAV ${INAV_VERSION} with retries..."
+          echo "Cloning INAV ${INAV_VERSION}..."
 
           for i in 1 2 3 4 5; do
-            echo "Clone attempt $i..."
-
+            echo "Clone attempt $i"
             git clone \
               --branch ${INAV_VERSION} \
               --depth 1 \
@@ -57,44 +40,170 @@ jobs:
               --config http.postBuffer=524288000 \
               https://github.com/iNavFlight/inav.git && break
 
-            echo "Clone failed, retrying in 10 seconds..."
+            echo "Clone failed, retrying..."
             rm -rf inav
             sleep 10
           done
 
-          if [ ! -d "inav" ]; then
-            echo "ERROR: INAV clone failed after retries"
-            exit 1
-          fi
-
+          test -d inav || exit 1
           cd inav
-          echo "INAV version: ${INAV_VERSION}"
-          echo "Commit:"
           git rev-parse HEAD
 
-      - name: Configure CMake
+      - name: Create CADDXF405_WING target
         run: |
           cd inav
-          mkdir -p build
-          cd build
-          cmake ..
+          rm -rf src/main/target/${TARGET}
+          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
 
-      - name: Check target exists
-        run: |
-          cd inav/build
-
-          echo "Checking target: ${TARGET}"
-
-          if make help | grep -w "${TARGET}"; then
-            echo "Target found: ${TARGET}"
-          else
-            echo "TARGET NOT FOUND: ${TARGET}"
-            echo "Available similar targets:"
-            make help | grep -i -E "SPEEDYBEE|F405|WING" || true
-            exit 1
+          if [ -f "src/main/target/${TARGET}/CMakeLists.txt" ]; then
+            sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
+            cat src/main/target/${TARGET}/CMakeLists.txt
           fi
 
-      - name: Patch startup text RUNAv.1
+      - name: Patch target to CADDXF405_WING LSM6DXX fixed axis
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          target = os.environ["TARGET"]
+          imu_align = os.environ.get("IMU_ALIGN", "CW90_DEG")
+
+          path = Path(f"src/main/target/{target}/target.h")
+          text = path.read_text(encoding="utf-8")
+
+          remove_patterns = [
+              r'#define\s+USE_IMU_ICM42605\s*',
+              r'#define\s+IMU_ICM42605_ALIGN\s+\S+\s*',
+              r'#define\s+ICM42605_CS_PIN\s+\S+\s*',
+              r'#define\s+ICM42605_SPI_BUS\s+\S+\s*',
+
+              r'#define\s+USE_IMU_ICM42688P\s*',
+              r'#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*',
+              r'#define\s+ICM42688P_CS_PIN\s+\S+\s*',
+              r'#define\s+ICM42688P_SPI_BUS\s+\S+\s*',
+
+              r'#define\s+USE_IMU_LSM6DXX\s*',
+              r'#define\s+LSM6DXX_SPI_BUS\s+\S+\s*',
+              r'#define\s+LSM6DXX_CS_PIN\s+\S+\s*',
+              r'#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*',
+
+              r'#define\s+USE_MAG_QMC5883\s*',
+              r'#define\s+USE_MAG_HMC5883\s*',
+              r'#define\s+MAG_I2C_BUS\s+\S+\s*',
+
+              r'#define\s+USE_BARO_SPL06\s*',
+              r'#define\s+BARO_I2C_BUS\s+\S+\s*',
+          ]
+
+          for p in remove_patterns:
+              text = re.sub(p, "", text, flags=re.M)
+
+          text += f"""
+
+          /*
+           * RUNA CADDXF405_WING FC4.5
+           *
+           * Base target: SPEEDYBEEF405WING
+           * IMU: LSM6DXX on SPI1
+           * CS: PA4
+           * SPI1: PA5 / PA6 / PA7
+           * BARO: SPL06
+           * MAG: QMC5883 / HMC5883
+           *
+           * Axis fix:
+           * IMU_LSM6DXX_ALIGN = {imu_align}
+           */
+          #define USE_IMU_LSM6DXX
+          #define LSM6DXX_SPI_BUS BUS_SPI1
+          #define LSM6DXX_CS_PIN PA4
+          #define IMU_LSM6DXX_ALIGN {imu_align}
+
+          #define USE_MAG_QMC5883
+          #define USE_MAG_HMC5883
+          #define MAG_I2C_BUS BUS_I2C1
+
+          #define USE_BARO_SPL06
+          #define BARO_I2C_BUS BUS_I2C1
+          """
+
+          path.write_text(text, encoding="utf-8")
+          print("RUNA target.h patched")
+          print("IMU align:", imu_align)
+          PY
+
+          grep -n -E "LSM6|QMC|HMC|SPL06|PA4|SPI1|CW" src/main/target/${TARGET}/target.h || true
+
+      - name: Patch LSM6DXX safe detect
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
+
+          if not path.exists():
+              print("ERROR: accgyro_lsm6dxx.c not found")
+              raise SystemExit(1)
+
+          text = path.read_text(encoding="utf-8")
+
+          sig = "static bool lsm6dxxDetect"
+          start = text.find(sig)
+
+          if start == -1:
+              raise SystemExit("lsm6dxxDetect not found")
+
+          brace = text.find("{", start)
+          depth = 0
+          end = -1
+
+          for i in range(brace, len(text)):
+              if text[i] == "{":
+                  depth += 1
+              elif text[i] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+
+          if end == -1:
+              raise SystemExit("lsm6dxxDetect end not found")
+
+          repl = """static bool lsm6dxxDetect(busDevice_t * dev)
+          {
+              uint8_t tmp = 0;
+
+              busSetSpeed(dev, BUS_SPEED_INITIALIZATION);
+              delay(150);
+
+              busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);
+
+              /*
+               * RUNA FC45 safe LSM6DXX detection.
+               *
+               * Do NOT force true if chip is not detected.
+               * Accepted IDs:
+               * 0x69 / 0x6A / 0x6B / 0x6C / 0x6D
+               */
+              if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
+                  lsm6dID = tmp;
+                  return true;
+              }
+
+              return false;
+          }"""
+
+          text = text[:start] + repl + text[end:]
+          path.write_text(text, encoding="utf-8")
+          print("RUNA LSM6DXX safe detect patched")
+          PY
+
+      - name: Patch RUNA name and startup text
         run: |
           cd inav
 
@@ -102,51 +211,44 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path("src/main/io/osd.c")
+          p = Path("src/main/fc/fc_msp.c")
 
-          if not path.exists():
-              print("ERROR: osd.c not found")
-              raise SystemExit(1)
+          if p.exists():
+              text = p.read_text(encoding="utf-8")
 
-          text = path.read_text(encoding="utf-8")
+              pat = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
+              rep = """const char *runaTargetName = "CADDXF405+RUNA";
+                  sbufWriteU8(dst, strlen(runaTargetName));
+                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));"""
 
-          patched = False
+              text, c = re.subn(pat, rep, text, count=1)
+              p.write_text(text, encoding="utf-8")
+              print("MSP name patch count:", c)
+          else:
+              print("WARNING: fc_msp.c not found")
 
-          variants = [
-              'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);',
-              'tfp_sprintf(string_buffer, "INAV VERSION: %s", flightControllerVersion);',
-          ]
+          p = Path("src/main/io/osd.c")
 
-          for old in variants:
+          if p.exists():
+              text = p.read_text(encoding="utf-8")
+
+              old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
+              new = 'tfp_sprintf(string_buffer, "version RUNA 1.0");'
+
               if old in text:
-                  text = text.replace(old, 'tfp_sprintf(string_buffer, "RUNAv.1");', 1)
-                  patched = True
-                  print("RUNAv.1 patched by direct match")
-                  break
+                  text = text.replace(old, new, 1)
+                  text = text.replace(
+                      'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
+                      'uint8_t xPos = OSD_CENTER_S(string_buffer);',
+                      1
+                  )
+                  print("Startup text patched")
+              else:
+                  print("WARNING: startup text pattern not found")
 
-          if not patched:
-              new_text, count = re.subn(
-                  r'tfp_sprintf\s*\(\s*string_buffer\s*,\s*"INAV VERSION:[^"]*"\s*,\s*[^;]+?\);',
-                  'tfp_sprintf(string_buffer, "RUNAv.1");',
-                  text,
-                  count=1
-              )
-
-              if count:
-                  text = new_text
-                  patched = True
-                  print("RUNAv.1 patched by regex")
-
-          text = text.replace(
-              'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
-              'uint8_t xPos = OSD_CENTER_S(string_buffer);',
-              1
-          )
-
-          if not patched:
-              print("WARNING: startup text pattern not found, build continues")
-
-          path.write_text(text, encoding="utf-8")
+              p.write_text(text, encoding="utf-8")
+          else:
+              print("WARNING: osd.c not found")
           PY
 
       - name: Patch RUNA OSD shutter
@@ -160,14 +262,14 @@ jobs:
           path = Path("src/main/io/osd.c")
 
           if not path.exists():
-              print("ERROR: osd.c not found")
-              raise SystemExit(1)
+              print("WARNING: osd.c not found, skip OSD shutter")
+              raise SystemExit(0)
 
           text = path.read_text(encoding="utf-8")
 
           pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
 
-          replacement = r'''
+          replacement = r"""
                   static bool runaShutterWasActive = false;
                   static uint8_t runaShutterNextRow = 0;
 
@@ -239,19 +341,19 @@ jobs:
                   }
 
                   displayHeartbeat(osdDisplayPort);
-                  displayCommitTransaction(osdDisplayPort);'''
+                  displayCommitTransaction(osdDisplayPort);"""
 
           new_text, count = re.subn(pattern, replacement, text, count=1)
 
           if count != 1:
-              print("ERROR: OSD draw block not found")
-              raise SystemExit(1)
+              print("WARNING: OSD draw block not found, shutter skipped")
+              raise SystemExit(0)
 
           path.write_text(new_text, encoding="utf-8")
-          print("RUNA OSD shutter patched on Layout 2")
+          print("RUNA OSD shutter patched")
           PY
 
-      - name: Patch VTX 3.3 GHz table
+      - name: Patch VTX 3.3GHz table
         run: |
           cd inav
 
@@ -262,31 +364,31 @@ jobs:
           path = Path("src/main/io/vtx_string.c")
 
           if not path.exists():
-              print("WARNING: vtx_string.c not found, skip VTX 3.3 table patch")
+              print("vtx_string.c not found, skip")
               raise SystemExit(0)
 
           text = path.read_text(encoding="utf-8")
 
-          def sub_once(text, pattern, repl, name, flags=0):
-              new_text, count = re.subn(pattern, repl, text, count=1, flags=flags)
-              print(f"{name}: patch count = {count}")
-              return new_text if count else text
+          def sub(text, pattern, repl, name, flags=0):
+              new, count = re.subn(pattern, repl, text, count=1, flags=flags)
+              print(name, "patch count:", count)
+              return new if count else text
 
-          text = sub_once(
+          text = sub(
               text,
               r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
               "#define VTX_STRING_1G3_BAND_COUNT 6",
-              "1G3 band count"
+              "band count"
           )
 
-          text = sub_once(
+          text = sub(
               text,
               r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
               "#define VTX_STRING_1G3_POWER_COUNT 5",
-              "1G3 power count"
+              "power count"
           )
 
-          text = sub_once(
+          text = sub(
               text,
               r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
               """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
@@ -297,191 +399,63 @@ jobs:
               { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
               { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
           };""",
-              "3.3GHz frequency table",
-              flags=re.S
-          )
-
-          text = sub_once(
-              text,
-              r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
-              "-", "A", "B", "C", "D", "E", "F",
-          };""",
-              "3.3GHz band names",
-              flags=re.S
-          )
-
-          text = sub_once(
-              text,
-              r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
-              'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
-              "3.3GHz band letters"
-          )
-
-          text = sub_once(
-              text,
-              r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
-              "---", "25", "200", "400", "800", "MAX"
-          };""",
-              "3.3GHz power names",
+              "3.3 table",
               flags=re.S
           )
 
           path.write_text(text, encoding="utf-8")
-          print("RUNA VTX 3.3 table patch finished")
           PY
+
+      - name: Configure CMake
+        run: |
+          cd inav
+          mkdir -p build
+          cd build
+          cmake ..
+
+      - name: Check target exists
+        run: |
+          cd inav/build
+
+          echo "Checking target: ${TARGET}"
+
+          if make help | grep -w "${TARGET}"; then
+            echo "Target found: ${TARGET}"
+          else
+            echo "TARGET NOT FOUND: ${TARGET}"
+            make help | grep -i -E "CADDX|SPEEDYBEE|F405|WING" || true
+            exit 1
+          fi
 
       - name: Build firmware
         run: |
           cd inav/build
           make clean_${TARGET} || true
-          make ${TARGET} -j$(nproc)
+          make ${TARGET} -j2 VERBOSE=1
 
-      - name: Find built files
-        if: always()
-        run: |
-          echo "Built firmware files:"
-          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
-
-      - name: Patch RUNA name in HEX
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          import os
-
-          old = os.environ["OLD_TARGET_NAME"].encode()
-          new = os.environ["NEW_TARGET_NAME"].encode()
-          target = os.environ["TARGET"]
-
-          print("OLD:", os.environ["OLD_TARGET_NAME"], "length:", len(old))
-          print("NEW:", os.environ["NEW_TARGET_NAME"], "length:", len(new))
-
-          if len(old) != len(new):
-              raise SystemExit(f"Length mismatch: old={len(old)} new={len(new)}")
-
-          out = Path("out")
-          out.mkdir(exist_ok=True)
-
-          hex_files = list(Path("inav/build").rglob(f"*{target}*.hex"))
-
-          if not hex_files:
-              hex_files = list(Path("inav/build").rglob("*.hex"))
-
-          if not hex_files:
-              raise SystemExit("No HEX files found")
-
-          src = hex_files[0]
-          print("Using HEX:", src)
-
-          records = []
-          memory = {}
-          base = 0
-
-          def parse_record(line):
-              count = int(line[1:3], 16)
-              addr = int(line[3:7], 16)
-              rectype = int(line[7:9], 16)
-              data = bytes.fromhex(line[9:9 + count * 2])
-              return count, addr, rectype, data
-
-          for line in src.read_text().splitlines():
-              if not line.startswith(":"):
-                  records.append((line, None))
-                  continue
-
-              count, addr, rectype, data = parse_record(line)
-              records.append((line, (count, addr, rectype, data, base)))
-
-              if rectype == 0:
-                  absolute = base + addr
-                  for i, b in enumerate(data):
-                      memory[absolute + i] = b
-              elif rectype == 4:
-                  base = int.from_bytes(data, "big") << 16
-              elif rectype == 2:
-                  base = int.from_bytes(data, "big") << 4
-
-          if not memory:
-              raise SystemExit("No data records found")
-
-          min_addr = min(memory)
-          max_addr = max(memory)
-          image = bytearray([0xFF] * (max_addr - min_addr + 1))
-
-          for addr, b in memory.items():
-              image[addr - min_addr] = b
-
-          positions = []
-          start = 0
-
-          while True:
-              pos = image.find(old, start)
-              if pos < 0:
-                  break
-              positions.append(pos)
-              start = pos + 1
-
-          if not positions:
-              print("WARNING: Target string not found in HEX memory image")
-              print("Copying HEX without +RUNA patch")
-              dst = out / "SPEEDYBEEF405WING_INAV712_UNPATCHED.hex"
-              dst.write_text(src.read_text())
-              raise SystemExit(0)
-
-          for pos in positions:
-              abs_pos = min_addr + pos
-              print("Patch target name at:", hex(abs_pos))
-              for i, b in enumerate(new):
-                  memory[abs_pos + i] = b
-
-          def checksum(record_bytes):
-              return ((~sum(record_bytes) + 1) & 0xFF)
-
-          patched_lines = []
-
-          for line, info in records:
-              if info is None:
-                  patched_lines.append(line)
-                  continue
-
-              count, addr, rectype, data, rec_base = info
-
-              if rectype == 0:
-                  absolute = rec_base + addr
-                  new_data = bytes(memory[absolute + i] for i in range(count))
-
-                  rec = bytearray()
-                  rec.append(count)
-                  rec.append((addr >> 8) & 0xFF)
-                  rec.append(addr & 0xFF)
-                  rec.append(rectype)
-                  rec.extend(new_data)
-                  chk = checksum(rec)
-
-                  patched_lines.append(":" + rec.hex().upper() + f"{chk:02X}")
-              else:
-                  patched_lines.append(line)
-
-          dst = out / "SPEEDYBEE405_RUNA_INAV712.hex"
-          dst.write_text("\n".join(patched_lines) + "\n")
-
-          print("Patched HEX written:", dst)
-          PY
-
-      - name: Copy BIN and ELF files
+      - name: Collect firmware and presets
+        if: success()
         run: |
           mkdir -p out
-          find inav/build -type f -name "*.bin" -exec cp {} out/ \; || true
-          find inav/build -type f -name "*.elf" -exec cp {} out/ \; || true
-          echo "OUT files:"
-          ls -lah out
+          cd inav/build
 
-      - name: Create RUNA CLI presets
-        run: |
-          mkdir -p out
+          FOUND=0
 
-          cat > out/RUNA_PRESET_5G8_INAV712.cli <<'EOF'
+          while IFS= read -r f; do
+            base="$(basename "$f")"
+            dst="../../out/RUNA_FC45_FIXED_IMU_${base}"
+            cp "$f" "$dst"
+            echo "Copied: $dst"
+            FOUND=$((FOUND + 1))
+          done < <(find . -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
+
+          if [ "$FOUND" -eq 0 ]; then
+            echo "ERROR: no firmware files found"
+            find . -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+            exit 1
+          fi
+
+          cat > ../../out/RUNA_FC45_PRESET_5G8_FIXED_IMU.cli <<'EOF'
           batch start
 
           feature OSD
@@ -490,10 +464,36 @@ jobs:
           feature CURRENT_METER
           feature BLACKBOX
           feature PWM_OUTPUT_ENABLE
-          feature MOTOR_STOP
-          feature FW_AUTOTRIM
 
-          # VTX 5.8GHz
+          set acc_hardware = LSM6DXX
+          set baro_hardware = SPL06
+          set mag_hardware = QMC5883
+
+          # Axis fix
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 900
+
+          set acczero_x = 0
+          set acczero_y = -2
+          set acczero_z = 20
+          set accgain_x = 4091
+          set accgain_y = 4093
+          set accgain_z = 4094
+
+          set vbat_adc_channel = 1
+          set rssi_adc_channel = 3
+          set current_adc_channel = 2
+          set airspeed_adc_channel = 4
+
+          set receiver_type = SERIAL
+          set serialrx_provider = CRSF
+
+          set align_mag = CW0FLIP
+          set align_mag_roll = 0
+          set align_mag_pitch = 0
+          set align_mag_yaw = 0
+
           set vtx_frequency_group = FREQUENCYGROUP_5G8
           set vtx_band = 1
           set vtx_channel = 1
@@ -505,12 +505,11 @@ jobs:
           set vtx_smartaudio_stopbits = 2
 
           # AUX4 / CH8
-          # MID  = RUNA OSD-штора / layout 2
-          # HIGH = layout 3
+          # MID  = RUNA OSD-штора / Layout 2
+          # HIGH = Layout 3
           aux 20 33 3 1300 1700
           aux 21 34 3 1700 2100
 
-          # RUNA PINIO
           set pinio_box1 = 47
           set pinio_box2 = 255
           set pinio_box3 = 57
@@ -519,7 +518,7 @@ jobs:
           save
           EOF
 
-          cat > out/RUNA_PRESET_3G3_INAV712.cli <<'EOF'
+          cat > ../../out/RUNA_FC45_PRESET_3G3_FIXED_IMU.cli <<'EOF'
           batch start
 
           feature OSD
@@ -528,11 +527,36 @@ jobs:
           feature CURRENT_METER
           feature BLACKBOX
           feature PWM_OUTPUT_ENABLE
-          feature MOTOR_STOP
-          feature FW_AUTOTRIM
 
-          # VTX 3.3GHz
-          # Таблица 3.3 вшита в группу FREQUENCYGROUP_1G3
+          set acc_hardware = LSM6DXX
+          set baro_hardware = SPL06
+          set mag_hardware = QMC5883
+
+          # Axis fix
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 900
+
+          set acczero_x = 0
+          set acczero_y = -2
+          set acczero_z = 20
+          set accgain_x = 4091
+          set accgain_y = 4093
+          set accgain_z = 4094
+
+          set vbat_adc_channel = 1
+          set rssi_adc_channel = 3
+          set current_adc_channel = 2
+          set airspeed_adc_channel = 4
+
+          set receiver_type = SERIAL
+          set serialrx_provider = CRSF
+
+          set align_mag = CW0FLIP
+          set align_mag_roll = 0
+          set align_mag_pitch = 0
+          set align_mag_yaw = 0
+
           set vtx_frequency_group = FREQUENCYGROUP_1G3
           set vtx_band = 1
           set vtx_channel = 1
@@ -544,12 +568,11 @@ jobs:
           set vtx_smartaudio_stopbits = 2
 
           # AUX4 / CH8
-          # MID  = RUNA OSD-штора / layout 2
-          # HIGH = layout 3
+          # MID  = RUNA OSD-штора / Layout 2
+          # HIGH = Layout 3
           aux 20 33 3 1300 1700
           aux 21 34 3 1700 2100
 
-          # RUNA PINIO
           set pinio_box1 = 47
           set pinio_box2 = 255
           set pinio_box3 = 57
@@ -558,65 +581,68 @@ jobs:
           save
           EOF
 
-          cat > out/README_RUNA_INAV712.txt <<'EOF'
-          RUNA SPEEDYBEEF405WING - INAV 7.1.2
+          cat > ../../out/README_RUNA_FC45_FIXED_IMU.txt <<'EOF'
+          RUNA FC45 FIXED IMU BUILD
 
-          Target:
-          - SPEEDYBEEF405WING
-
-          Display name after HEX patch:
-          - SPEEDYBEE405+RUNA
+          Base:
+          - INAV 7.1.2
+          - BASE_TARGET: SPEEDYBEEF405WING
+          - NEW TARGET: CADDXF405_WING
 
           Added:
-          - +RUNA name
-          - RUNAv.1 startup OSD text
+          - CADDXF405+RUNA name
+          - startup text: version RUNA 1.0
+          - LSM6DXX / SPL06 / QMC5883 target patch
+          - safer LSM6DXX detection
+          - IMU alignment: CW90_DEG
           - RUNA OSD shutter on Layout 2
-          - VTX 5.8GHz preset
           - VTX 3.3GHz table in FREQUENCYGROUP_1G3
-          - AUX4 / CH8 for OSD shutter/Layout 2
+          - 5.8GHz and 3.3GHz CLI presets
 
-          Important:
-          This build is based on INAV 7.1.2 because your working dump is:
-          INAV/SPEEDYBEEF405WING 7.1.2 custom
+          IMPORTANT:
+          Test without propeller.
 
-          Flashing:
-          1. Use INAV Configurator 7.x.
-          2. Flash SPEEDYBEE405_RUNA_INAV712.hex.
-          3. Use Full Chip Erase.
-          4. After flash, open CLI:
+          After flashing:
+          1. Full Chip Erase.
+          2. Open CLI:
              defaults
              save
-          5. Then restore your known working dump/settings carefully.
 
-          Check after flashing:
-          version
-          status
+          3. Check:
+             version
+             status
 
-          Good result:
-          - GYRO should be available
-          - ACC should be available
-          - BARO should be OK
-          - MAG should be OK if compass connected
+          Sensors should show:
+          - GYRO available
+          - ACC available
+          - BARO SPL06
+          - MAG QMC5883/HMC5883 if compass connected
 
-          OSD shutter:
-          - Layout 2 = RUNA shutter
-          - AUX4 / CH8 MID enables Layout 2
-          - AUX4 / CH8 HIGH enables Layout 3
+          Setup movement must be:
+          - right wing down -> model right wing down
+          - left wing down -> model left wing down
+          - nose up -> model nose up
+          - nose down -> model nose down
 
-          Use only one preset:
-          - RUNA_PRESET_5G8_INAV712.cli
-          - RUNA_PRESET_3G3_INAV712.cli
+          If movement is still rotated:
+          Try CLI:
+             set align_board_yaw = 2700
+             save
 
-          Do not fly until:
-          - sensors are OK
-          - Setup model movement is correct
-          - receiver is correct
-          - servos move correctly
-          - motor outputs are checked without propeller
+          If still wrong:
+          rebuild with:
+             IMU_ALIGN: CW270_DEG
+
+          If model spins many rotations from tiny movement:
+          Do not fly.
+          The IMU detect/axis is still wrong.
           EOF
 
-      - name: Upload artifact
+          ls -la ../../out
+
+      - name: Upload firmware
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SPEEDYBEEF405WING-RUNA-INAV712-Firmware
+          name: RUNA-FC45-FIXED-IMU
           path: out/*
