@@ -1,4 +1,4 @@
-name: Build RUNA FC45 CW270
+name: Build RUNA F405 WING v19 MULTI AXIS TEST
 
 on:
   workflow_dispatch:
@@ -8,648 +8,418 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    env:
-      BASE_TARGET: SPEEDYBEEF405WING
-      TARGET: CADDXF405_WING
-      INAV_VERSION: 7.1.2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: A_NORMAL_SCALE16
+            axis: A
+            scale: 16
+          - name: B_SWAP_XY_SCALE16
+            axis: B
+            scale: 16
+          - name: C_SWAP_XZ_SCALE16
+            axis: C
+            scale: 16
+          - name: D_SWAP_YZ_SCALE16
+            axis: D
+            scale: 16
+          - name: E_INVERT_Y_SCALE16
+            axis: E
+            scale: 16
+          - name: F_INVERT_Z_SCALE16
+            axis: F
+            scale: 16
 
-      # Без FLIP. Новый тест ориентации IMU.
-      IMU_ALIGN: CW270_DEG
+    env:
+      VARIANT_NAME: ${{ matrix.name }}
+      AXIS_MODE: ${{ matrix.axis }}
+      SCALE_DIV: ${{ matrix.scale }}
 
     steps:
-      - name: Install deps
+      - name: Checkout INAV 7.1.2
         run: |
-          sudo apt-get update -y -o Acquire::Retries=3
-          sudo apt-get install -y --no-install-recommends \
-            git build-essential g++ ruby cmake make \
-            gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
-            libstdc++-arm-none-eabi-dev ninja-build python3 python3-pip
+          git clone --recursive --branch 7.1.2 https://github.com/iNavFlight/inav.git inav
 
-      - name: Clone INAV 7.1.2
-        run: |
-          set -e
-          echo "Cloning INAV ${INAV_VERSION}..."
-
-          for i in 1 2 3 4 5; do
-            echo "Clone attempt $i"
-            git clone \
-              --branch ${INAV_VERSION} \
-              --depth 1 \
-              --single-branch \
-              --config http.version=HTTP/1.1 \
-              --config http.postBuffer=524288000 \
-              https://github.com/iNavFlight/inav.git && break
-
-            echo "Clone failed, retrying..."
-            rm -rf inav
-            sleep 10
-          done
-
-          test -d inav || exit 1
-          cd inav
-          git rev-parse HEAD
-
-      - name: Create CADDXF405_WING target
+      - name: Add RUNA target and patch LSM6DXX
         run: |
           cd inav
-          rm -rf src/main/target/${TARGET}
-          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
 
-          if [ -f "src/main/target/${TARGET}/CMakeLists.txt" ]; then
-            sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
-            cat src/main/target/${TARGET}/CMakeLists.txt
-          fi
+          echo "===== RUNA v19 variant: $VARIANT_NAME axis=$AXIS_MODE scale=$SCALE_DIV ====="
 
-      - name: Patch target to CADDXF405_WING LSM6DXX CW270
-        run: |
-          cd inav
+          rm -rf src/main/target/RUNA_F405_WING
+          mkdir -p src/main/target/RUNA_F405_WING
+
+          cp -r src/main/target/MATEKF405SE/* src/main/target/RUNA_F405_WING/
+
+          cat > src/main/target/RUNA_F405_WING/CMakeLists.txt <<'EOF'
+          target_stm32f405xg(RUNA_F405_WING)
+          EOF
 
           python3 <<'PY'
-          from pathlib import Path
           import os
-          import re
+          from pathlib import Path
 
-          target = os.environ["TARGET"]
-          imu_align = os.environ.get("IMU_ALIGN", "CW270_DEG")
+          axis_mode = os.environ.get("AXIS_MODE", "A")
+          scale_div = os.environ.get("SCALE_DIV", "16")
 
-          path = Path(f"src/main/target/{target}/target.h")
-          text = path.read_text(encoding="utf-8")
+          p = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
+          s = p.read_text()
 
-          remove_patterns = [
-              r'#define\s+USE_IMU_ICM42605\s*',
-              r'#define\s+IMU_ICM42605_ALIGN\s+\S+\s*',
-              r'#define\s+ICM42605_CS_PIN\s+\S+\s*',
-              r'#define\s+ICM42605_SPI_BUS\s+\S+\s*',
+          extra_defs = (
+              "\n"
+              "#ifndef LSM6DSV_CHIP_ID\n"
+              "#define LSM6DSV_CHIP_ID 0x70\n"
+              "#endif\n"
+          )
 
-              r'#define\s+USE_IMU_ICM42688P\s*',
-              r'#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*',
-              r'#define\s+ICM42688P_CS_PIN\s+\S+\s*',
-              r'#define\s+ICM42688P_SPI_BUS\s+\S+\s*',
+          if "LSM6DSV_CHIP_ID" not in s:
+              marker = "#define LSM6DS3_CHIP_ID 0x69"
+              if marker in s:
+                  s = s.replace(marker, marker + extra_defs)
 
-              r'#define\s+USE_IMU_LSM6DXX\s*',
-              r'#define\s+LSM6DXX_SPI_BUS\s+\S+\s*',
-              r'#define\s+LSM6DXX_CS_PIN\s+\S+\s*',
-              r'#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*',
+          if "case LSM6DSV_CHIP_ID:" not in s:
+              if "case LSM6DSL_CHIP_ID:" in s:
+                  s = s.replace(
+                      "case LSM6DSL_CHIP_ID:",
+                      "case LSM6DSL_CHIP_ID:\n            case LSM6DSV_CHIP_ID:"
+                  )
+              elif "case LSM6DSO_CHIP_ID:" in s:
+                  s = s.replace(
+                      "case LSM6DSO_CHIP_ID:",
+                      "case LSM6DSO_CHIP_ID:\n            case LSM6DSV_CHIP_ID:"
+                  )
 
-              r'#define\s+USE_MAG_QMC5883\s*',
-              r'#define\s+USE_MAG_HMC5883\s*',
-              r'#define\s+MAG_I2C_BUS\s+\S+\s*',
+          if "static uint8_t runaLsm6dxxChipId" not in s:
+              s = s.replace(
+                  "#define LSM6DS3_CHIP_ID 0x69",
+                  "#define LSM6DS3_CHIP_ID 0x69\n\nstatic uint8_t runaLsm6dxxChipId = 0;"
+              )
 
-              r'#define\s+USE_BARO_SPL06\s*',
-              r'#define\s+BARO_I2C_BUS\s+\S+\s*',
-          ]
+          if "runaLsm6dxxChipId = tmp;" not in s:
+              s = s.replace(
+                  "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);",
+                  "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);\n        runaLsm6dxxChipId = tmp;"
+              )
 
-          for p in remove_patterns:
-              text = re.sub(p, "", text, flags=re.M)
+          old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
+          old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
 
-          text += f"""
+          new_scale = (
+              "// RUNA_GYRO_SCALE_FIX_0x70\n"
+              f"    if (lsm6dID == LSM6DSV_CHIP_ID) {{\n"
+              f"        gyro->scale = 1.0f / (16.4f * {scale_div}.0f); // RUNA v19 scale\n"
+              "    } else {\n"
+              "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
+              "    }"
+          )
+
+          if "RUNA_GYRO_SCALE_FIX_0x70" not in s:
+              if old_scale_1 in s:
+                  s = s.replace(old_scale_1, new_scale)
+              elif old_scale_2 in s:
+                  s = s.replace(old_scale_2, new_scale)
+              else:
+                  print("WARNING: gyro scale line not found")
+
+          old_raw = (
+              "gyro->gyroADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
+              "    gyro->gyroADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
+              "    gyro->gyroADCRaw[Z] = (float) int16_val_little_endian(data, 2);"
+          )
+
+          maps = {
+              "A": (
+                  "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
+                  "        gyro->gyroADCRaw[Y] = (float)runaGy;\n"
+                  "        gyro->gyroADCRaw[Z] = (float)runaGz;\n"
+              ),
+              "B": (
+                  "        gyro->gyroADCRaw[X] = (float)runaGy;\n"
+                  "        gyro->gyroADCRaw[Y] = (float)runaGx;\n"
+                  "        gyro->gyroADCRaw[Z] = (float)runaGz;\n"
+              ),
+              "C": (
+                  "        gyro->gyroADCRaw[X] = (float)runaGz;\n"
+                  "        gyro->gyroADCRaw[Y] = (float)runaGy;\n"
+                  "        gyro->gyroADCRaw[Z] = (float)runaGx;\n"
+              ),
+              "D": (
+                  "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
+                  "        gyro->gyroADCRaw[Y] = (float)runaGz;\n"
+                  "        gyro->gyroADCRaw[Z] = (float)runaGy;\n"
+              ),
+              "E": (
+                  "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
+                  "        gyro->gyroADCRaw[Y] = (float)-runaGy;\n"
+                  "        gyro->gyroADCRaw[Z] = (float)runaGz;\n"
+              ),
+              "F": (
+                  "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
+                  "        gyro->gyroADCRaw[Y] = (float)runaGy;\n"
+                  "        gyro->gyroADCRaw[Z] = (float)-runaGz;\n"
+              ),
+          }
+
+          axis_map = maps.get(axis_mode, maps["A"])
+
+          new_raw = (
+              "// RUNA_GYRO_AXIS_MAP_0x70\n"
+              "    int16_t runaGx = int16_val_little_endian(data, 0);\n"
+              "    int16_t runaGy = int16_val_little_endian(data, 1);\n"
+              "    int16_t runaGz = int16_val_little_endian(data, 2);\n\n"
+              "    if (runaLsm6dxxChipId == LSM6DSV_CHIP_ID) {\n"
+              f"        // RUNA axis mode {axis_mode}\n"
+              f"{axis_map}"
+              "    } else {\n"
+              "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
+              "        gyro->gyroADCRaw[Y] = (float)runaGy;\n"
+              "        gyro->gyroADCRaw[Z] = (float)runaGz;\n"
+              "    }"
+          )
+
+          if "RUNA_GYRO_AXIS_MAP_0x70" not in s:
+              if old_raw in s:
+                  s = s.replace(old_raw, new_raw)
+              else:
+                  print("WARNING: gyro raw read block not found")
+
+          p.write_text(s)
+          PY
+
+          echo "===== PATCHED LSM6DXX snippets ====="
+          grep -nE "LSM6DSV_CHIP_ID|case LSM6D|RUNA_GYRO_SCALE_FIX|RUNA_GYRO_AXIS_MAP|gyro->scale|gyroADCRaw|WHO_AM_I" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+
+          # Board name
+          sed -i '/TARGET_BOARD_IDENTIFIER/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/USBD_PRODUCT_STRING/d' src/main/target/RUNA_F405_WING/target.h || true
+
+          # Remove old Matek IMU
+          sed -i '/MPU6000/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/ICM42605/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/ICM42688/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/USE_IMU_MPU/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/USE_IMU_ICM/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/IMU_MPU/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/IMU_ICM/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/MPU6000_CS_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/MPU6000_SPI_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/ICM42605_CS_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/ICM42605_SPI_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
+
+          # Remove old gyro/acc/lsm target defines
+          sed -i '/USE_GYRO/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/USE_ACC/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/GYRO_/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/ACC_/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/USE_IMU_LSM/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/IMU_LSM/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/LSM6/d' src/main/target/RUNA_F405_WING/target.h || true
+
+          # BARO/MAG only SPL06 + HMC5883 on I2C1
+          sed -i '/USE_BARO_/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/USE_MAG_/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/USE_MAG_ALL/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/BARO_I2C_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/MAG_I2C_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
+
+          # Remove I2C2 extras
+          sed -i '/USE_I2C_DEVICE_2/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/I2C2_SCL/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/I2C2_SDA/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/RANGEFINDER_I2C_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/PITOT_I2C_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/TEMPERATURE_I2C_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
+
+          # PINIO
+          sed -i '/PINIO1_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/PINIO2_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
+
+          # ADC
+          sed -i '/ADC_INSTANCE/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/ADC1_DMA_STREAM/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/ADC_CHANNEL_1_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/ADC_CHANNEL_2_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/ADC_CHANNEL_3_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/VBAT_ADC_CHANNEL/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/CURRENT_METER_ADC_CHANNEL/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/RSSI_ADC_CHANNEL/d' src/main/target/RUNA_F405_WING/target.h || true
+
+          cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA CADDXF405_WING FC4.5
-           *
-           * Base target: SPEEDYBEEF405WING
-           * IMU: LSM6DXX on SPI1
-           * CS: PA4
-           * SPI1: PA5 / PA6 / PA7
-           * BARO: SPL06
-           * MAG: QMC5883 / HMC5883
-           *
-           * Axis test:
-           * IMU_LSM6DXX_ALIGN = {imu_align}
+           * RUNA_F405_WING v19 multi-axis test
            */
+
+          #undef TARGET_BOARD_IDENTIFIER
+          #define TARGET_BOARD_IDENTIFIER "RUNA"
+
+          #undef USBD_PRODUCT_STRING
+          #define USBD_PRODUCT_STRING "RUNA_F405_WING"
+
+          #define USE_SPI
+          #define USE_SPI_DEVICE_1
+
+          #undef SPI1_NSS_PIN
+          #define SPI1_NSS_PIN PA4
+
+          #undef SPI1_SCK_PIN
+          #define SPI1_SCK_PIN PA5
+
+          #undef SPI1_MISO_PIN
+          #define SPI1_MISO_PIN PA6
+
+          #undef SPI1_MOSI_PIN
+          #define SPI1_MOSI_PIN PA7
+
           #define USE_IMU_LSM6DXX
+          #define IMU_LSM6DXX_ALIGN CW0_DEG
+          #define LSM6DXX_CS_PIN SPI1_NSS_PIN
           #define LSM6DXX_SPI_BUS BUS_SPI1
-          #define LSM6DXX_CS_PIN PA4
-          #define IMU_LSM6DXX_ALIGN {imu_align}
 
-          #define USE_MAG_QMC5883
-          #define USE_MAG_HMC5883
-          #define MAG_I2C_BUS BUS_I2C1
+          #define USE_I2C
+          #define USE_I2C_DEVICE_1
 
-          #define USE_BARO_SPL06
+          #undef I2C1_SCL
+          #define I2C1_SCL PB8
+
+          #undef I2C1_SDA
+          #define I2C1_SDA PB9
+
+          #define USE_BARO
           #define BARO_I2C_BUS BUS_I2C1
-          """
+          #define USE_BARO_SPL06
 
-          path.write_text(text, encoding="utf-8")
-          print("RUNA target.h patched")
-          print("IMU align:", imu_align)
-          PY
+          #define USE_MAG
+          #define MAG_I2C_BUS BUS_I2C1
+          #define USE_MAG_HMC5883
 
-          grep -n -E "LSM6|QMC|HMC|SPL06|PA4|SPI1|CW" src/main/target/${TARGET}/target.h || true
+          #define USE_SPI_DEVICE_2
 
-      - name: Patch LSM6DXX safe detect
+          #undef SPI2_SCK_PIN
+          #define SPI2_SCK_PIN PB13
+
+          #undef SPI2_MISO_PIN
+          #define SPI2_MISO_PIN PC2
+
+          #undef SPI2_MOSI_PIN
+          #define SPI2_MOSI_PIN PC3
+
+          #define USE_MAX7456
+          #define MAX7456_CS_PIN PB12
+          #define MAX7456_SPI_BUS BUS_SPI2
+
+          #define USE_SPI_DEVICE_3
+
+          #undef SPI3_SCK_PIN
+          #define SPI3_SCK_PIN PB3
+
+          #undef SPI3_MISO_PIN
+          #define SPI3_MISO_PIN PB4
+
+          #undef SPI3_MOSI_PIN
+          #define SPI3_MOSI_PIN PB5
+
+          #define USE_SDCARD
+          #define USE_SDCARD_SPI
+          #define SDCARD_SPI_BUS BUS_SPI3
+          #define SDCARD_CS_PIN PC14
+
+          #define USE_UART1
+          #define UART1_TX_PIN PA9
+          #define UART1_RX_PIN PA10
+
+          #define USE_UART6
+          #define UART6_TX_PIN PC6
+          #define UART6_RX_PIN PC7
+
+          #define USE_ADC
+          #define ADC_INSTANCE ADC1
+          #define ADC1_DMA_STREAM DMA2_Stream0
+
+          #undef ADC_CHANNEL_1_PIN
+          #define ADC_CHANNEL_1_PIN PC0
+
+          #undef ADC_CHANNEL_2_PIN
+          #define ADC_CHANNEL_2_PIN PC1
+
+          #undef VBAT_ADC_CHANNEL
+          #define VBAT_ADC_CHANNEL ADC_CHN_1
+
+          #undef CURRENT_METER_ADC_CHANNEL
+          #define CURRENT_METER_ADC_CHANNEL ADC_CHN_2
+
+          #undef BEEPER
+          #define BEEPER PC15
+          #define BEEPER_INVERTED
+
+          #define USE_PINIO
+          #define USE_PINIOBOX
+
+          #undef PINIO1_PIN
+          #define PINIO1_PIN PC13
+
+          EOF
+
+          cat > src/main/target/RUNA_F405_WING/target.c <<'EOF'
+          #include <stdbool.h>
+          #include <platform.h>
+
+          #include "drivers/io.h"
+          #include "drivers/pwm_mapping.h"
+          #include "drivers/timer.h"
+
+          timerHardware_t timerHardware[] = {
+              DEF_TIM(TIM4,  CH2, PB7,  TIM_USE_OUTPUT_AUTO, 1, 0), // MOTOR1
+              DEF_TIM(TIM4,  CH1, PB6,  TIM_USE_OUTPUT_AUTO, 1, 0), // MOTOR2
+
+              DEF_TIM(TIM3,  CH3, PB0,  TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO3
+              DEF_TIM(TIM3,  CH4, PB1,  TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO4
+              DEF_TIM(TIM8,  CH3, PC8,  TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO5
+              DEF_TIM(TIM8,  CH4, PC9,  TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO6
+
+              DEF_TIM(TIM2,  CH1, PA15, TIM_USE_LED,         0, 0),
+              DEF_TIM(TIM5,  CH3, PA2,  TIM_USE_ANY,         0, 0),
+          };
+
+          const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
+          EOF
+
+          echo "===== FINAL RUNA v19 target.h snippets ====="
+          grep -nE "RUNA|TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|LSM6|IMU|BARO|MAG|MAX7456|SPI1|SPI2|SPI3|I2C1|UART1|UART6|PINIO|BEEPER|SDCARD|ADC|DMA" src/main/target/RUNA_F405_WING/target.h || true
+
+      - name: Install dependencies
         run: |
-          cd inav
+          sudo apt-get update
+          sudo apt-get install -y git make cmake gcc-arm-none-eabi binutils-arm-none-eabi python3
 
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
-
-          if not path.exists():
-              print("ERROR: accgyro_lsm6dxx.c not found")
-              raise SystemExit(1)
-
-          text = path.read_text(encoding="utf-8")
-
-          sig = "static bool lsm6dxxDetect"
-          start = text.find(sig)
-
-          if start == -1:
-              raise SystemExit("lsm6dxxDetect not found")
-
-          brace = text.find("{", start)
-          depth = 0
-          end = -1
-
-          for i in range(brace, len(text)):
-              if text[i] == "{":
-                  depth += 1
-              elif text[i] == "}":
-                  depth -= 1
-                  if depth == 0:
-                      end = i + 1
-                      break
-
-          if end == -1:
-              raise SystemExit("lsm6dxxDetect end not found")
-
-          repl = """static bool lsm6dxxDetect(busDevice_t * dev)
-          {
-              uint8_t tmp = 0;
-
-              busSetSpeed(dev, BUS_SPEED_INITIALIZATION);
-              delay(150);
-
-              busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);
-
-              /*
-               * RUNA FC45 safe LSM6DXX detection.
-               * Accepted IDs:
-               * 0x69 / 0x6A / 0x6B / 0x6C / 0x6D
-               */
-              if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
-                  lsm6dID = tmp;
-                  return true;
-              }
-
-              return false;
-          }"""
-
-          text = text[:start] + repl + text[end:]
-          path.write_text(text, encoding="utf-8")
-          print("RUNA LSM6DXX safe detect patched")
-          PY
-
-      - name: Patch RUNA name and startup text
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          p = Path("src/main/fc/fc_msp.c")
-
-          if p.exists():
-              text = p.read_text(encoding="utf-8")
-
-              pat = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
-              rep = """const char *runaTargetName = "CADDXF405+RUNA";
-                  sbufWriteU8(dst, strlen(runaTargetName));
-                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));"""
-
-              text, c = re.subn(pat, rep, text, count=1)
-              p.write_text(text, encoding="utf-8")
-              print("MSP name patch count:", c)
-          else:
-              print("WARNING: fc_msp.c not found")
-
-          p = Path("src/main/io/osd.c")
-
-          if p.exists():
-              text = p.read_text(encoding="utf-8")
-
-              old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
-              new = 'tfp_sprintf(string_buffer, "version RUNA 1.0");'
-
-              if old in text:
-                  text = text.replace(old, new, 1)
-                  text = text.replace(
-                      'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
-                      'uint8_t xPos = OSD_CENTER_S(string_buffer);',
-                      1
-                  )
-                  print("Startup text patched")
-              else:
-                  print("WARNING: startup text pattern not found")
-
-              p.write_text(text, encoding="utf-8")
-          else:
-              print("WARNING: osd.c not found")
-          PY
-
-      - name: Patch RUNA OSD shutter
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("src/main/io/osd.c")
-
-          if not path.exists():
-              print("WARNING: osd.c not found, skip OSD shutter")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8")
-
-          pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
-
-          replacement = r"""
-                  static bool runaShutterWasActive = false;
-                  static uint8_t runaShutterNextRow = 0;
-
-                  if (currentLayout == 2) {
-                      textAttributes_t runaAttr = TEXT_ATTRIBUTES_NONE;
-                      TEXT_ATTRIBUTES_ADD_SOLID_BG(runaAttr);
-
-                      char runaMask[64];
-
-                      uint8_t cols = osdDisplayPort->cols;
-                      uint8_t rows = osdDisplayPort->rows;
-
-                      if (cols > 63) {
-                          cols = 63;
-                      }
-
-                      const uint8_t windowWidth = cols >= 30 ? 10 : cols / 3;
-                      const uint8_t windowHeight = rows >= 16 ? 4 : rows / 3;
-
-                      const uint8_t windowX = (cols - windowWidth) / 2;
-                      const uint8_t windowY = (rows - windowHeight) / 2;
-
-                      if (!runaShutterWasActive) {
-                          displayClearScreen(osdDisplayPort);
-                          runaShutterWasActive = true;
-                          runaShutterNextRow = 0;
-                      }
-
-                      for (uint8_t pass = 0; pass < 2; pass++) {
-                          uint8_t y = runaShutterNextRow;
-
-                          const bool inWindowY = (y >= windowY) && (y < windowY + windowHeight);
-
-                          if (!inWindowY) {
-                              memset(runaMask, ' ', cols);
-                              runaMask[cols] = '\0';
-                              displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
-                          } else {
-                              if (windowX > 0) {
-                                  memset(runaMask, ' ', windowX);
-                                  runaMask[windowX] = '\0';
-                                  displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
-                              }
-
-                              const uint8_t rightX = windowX + windowWidth;
-
-                              if (rightX < cols) {
-                                  const uint8_t rightWidth = cols - rightX;
-                                  memset(runaMask, ' ', rightWidth);
-                                  runaMask[rightWidth] = '\0';
-                                  displayWriteWithAttr(osdDisplayPort, rightX, y, runaMask, runaAttr);
-                              }
-                          }
-
-                          runaShutterNextRow++;
-
-                          if (runaShutterNextRow >= rows) {
-                              runaShutterNextRow = 0;
-                          }
-                      }
-                  } else {
-                      if (runaShutterWasActive) {
-                          displayClearScreen(osdDisplayPort);
-                          runaShutterWasActive = false;
-                          runaShutterNextRow = 0;
-                      }
-
-                      osdDrawNextElement();
-                  }
-
-                  displayHeartbeat(osdDisplayPort);
-                  displayCommitTransaction(osdDisplayPort);"""
-
-          new_text, count = re.subn(pattern, replacement, text, count=1)
-
-          if count != 1:
-              print("WARNING: OSD draw block not found, shutter skipped")
-              raise SystemExit(0)
-
-          path.write_text(new_text, encoding="utf-8")
-          print("RUNA OSD shutter patched")
-          PY
-
-      - name: Patch VTX 3.3GHz table
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("src/main/io/vtx_string.c")
-
-          if not path.exists():
-              print("vtx_string.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8")
-
-          def sub(text, pattern, repl, name, flags=0):
-              new, count = re.subn(pattern, repl, text, count=1, flags=flags)
-              print(name, "patch count:", count)
-              return new if count else text
-
-          text = sub(
-              text,
-              r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
-              "#define VTX_STRING_1G3_BAND_COUNT 6",
-              "band count"
-          )
-
-          text = sub(
-              text,
-              r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
-              "#define VTX_STRING_1G3_POWER_COUNT 5",
-              "power count"
-          )
-
-          text = sub(
-              text,
-              r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
-              """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
-              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
-              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
-              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
-              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
-              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
-              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
-          };""",
-              "3.3 table",
-              flags=re.S
-          )
-
-          path.write_text(text, encoding="utf-8")
-          PY
-
-      - name: Configure CMake
+      - name: Configure
         run: |
           cd inav
           mkdir -p build
           cd build
           cmake ..
 
-      - name: Check target exists
+      - name: Build RUNA_F405_WING
         run: |
           cd inav/build
+          make RUNA_F405_WING -j$(nproc)
 
-          echo "Checking target: ${TARGET}"
-
-          if make help | grep -w "${TARGET}"; then
-            echo "Target found: ${TARGET}"
-          else
-            echo "TARGET NOT FOUND: ${TARGET}"
-            make help | grep -i -E "CADDX|SPEEDYBEE|F405|WING" || true
-            exit 1
-          fi
-
-      - name: Build firmware
+      - name: Find firmware
         run: |
-          cd inav/build
-          make clean_${TARGET} || true
-          make ${TARGET} -j2 VERBOSE=1
+          echo "Built firmware files:"
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
 
-      - name: Collect firmware and presets
-        if: success()
+      - name: Rename firmware with variant name
         run: |
           mkdir -p out
-          cd inav/build
-
-          FOUND=0
-
-          while IFS= read -r f; do
-            base="$(basename "$f")"
-            dst="../../out/RUNA_FC45_CW270_${base}"
-            cp "$f" "$dst"
-            echo "Copied: $dst"
-            FOUND=$((FOUND + 1))
-          done < <(find . -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
-
-          if [ "$FOUND" -eq 0 ]; then
-            echo "ERROR: no firmware files found"
-            find . -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
-            exit 1
-          fi
-
-          cat > ../../out/RUNA_FC45_PRESET_5G8_CW270.cli <<'EOF'
-          batch start
-
-          feature OSD
-          feature VTX
-          feature TELEMETRY
-          feature CURRENT_METER
-          feature BLACKBOX
-          feature PWM_OUTPUT_ENABLE
-
-          set acc_hardware = LSM6DXX
-          set baro_hardware = SPL06
-          set mag_hardware = NONE
-
-          # Physical board arrow points to tail:
-          set align_board_roll = 0
-          set align_board_pitch = 0
-          set align_board_yaw = 1800
-
-          set gyro_zero_x = 0
-          set gyro_zero_y = 0
-          set gyro_zero_z = 0
-
-          set acczero_x = 0
-          set acczero_y = 0
-          set acczero_z = 0
-          set accgain_x = 4096
-          set accgain_y = 4096
-          set accgain_z = 4096
-
-          set vbat_adc_channel = 1
-          set rssi_adc_channel = 3
-          set current_adc_channel = 2
-          set airspeed_adc_channel = 4
-
-          set receiver_type = SERIAL
-          set serialrx_provider = CRSF
-
-          set vtx_frequency_group = FREQUENCYGROUP_5G8
-          set vtx_band = 1
-          set vtx_channel = 1
-          set vtx_power = 1
-          set vtx_low_power_disarm = OFF
-          set vtx_halfduplex = ON
-          set vtx_smartaudio_early_akk_workaround = ON
-          set vtx_smartaudio_alternate_softserial_method = ON
-          set vtx_smartaudio_stopbits = 2
-
-          # AUX4 / CH8
-          # MID  = RUNA OSD-штора / Layout 2
-          # HIGH = Layout 3
-          aux 20 33 3 1300 1700
-          aux 21 34 3 1700 2100
-
-          set pinio_box1 = 47
-          set pinio_box2 = 255
-          set pinio_box3 = 57
-          set pinio_box4 = 255
-
-          save
-          EOF
-
-          cat > ../../out/RUNA_FC45_PRESET_3G3_CW270.cli <<'EOF'
-          batch start
-
-          feature OSD
-          feature VTX
-          feature TELEMETRY
-          feature CURRENT_METER
-          feature BLACKBOX
-          feature PWM_OUTPUT_ENABLE
-
-          set acc_hardware = LSM6DXX
-          set baro_hardware = SPL06
-          set mag_hardware = NONE
-
-          # Physical board arrow points to tail:
-          set align_board_roll = 0
-          set align_board_pitch = 0
-          set align_board_yaw = 1800
-
-          set gyro_zero_x = 0
-          set gyro_zero_y = 0
-          set gyro_zero_z = 0
-
-          set acczero_x = 0
-          set acczero_y = 0
-          set acczero_z = 0
-          set accgain_x = 4096
-          set accgain_y = 4096
-          set accgain_z = 4096
-
-          set vbat_adc_channel = 1
-          set rssi_adc_channel = 3
-          set current_adc_channel = 2
-          set airspeed_adc_channel = 4
-
-          set receiver_type = SERIAL
-          set serialrx_provider = CRSF
-
-          set vtx_frequency_group = FREQUENCYGROUP_1G3
-          set vtx_band = 1
-          set vtx_channel = 1
-          set vtx_power = 5
-          set vtx_low_power_disarm = OFF
-          set vtx_halfduplex = ON
-          set vtx_smartaudio_early_akk_workaround = ON
-          set vtx_smartaudio_alternate_softserial_method = ON
-          set vtx_smartaudio_stopbits = 2
-
-          # AUX4 / CH8
-          # MID  = RUNA OSD-штора / Layout 2
-          # HIGH = Layout 3
-          aux 20 33 3 1300 1700
-          aux 21 34 3 1700 2100
-
-          set pinio_box1 = 47
-          set pinio_box2 = 255
-          set pinio_box3 = 57
-          set pinio_box4 = 255
-
-          save
-          EOF
-
-          cat > ../../out/README_RUNA_FC45_CW270.txt <<'EOF'
-          RUNA FC45 CW270_DEG BUILD
-
-          Base:
-          - INAV 7.1.2
-          - BASE_TARGET: SPEEDYBEEF405WING
-          - NEW TARGET: CADDXF405_WING
-
-          IMU test:
-          - IMU_LSM6DXX_ALIGN = CW270_DEG
-          - NO FLIP
-
-          Added:
-          - CADDXF405+RUNA name
-          - startup text: version RUNA 1.0
-          - LSM6DXX / SPL06 / QMC5883 target patch
-          - safe LSM6DXX detection
-          - RUNA OSD shutter on Layout 2
-          - VTX 3.3GHz table in FREQUENCYGROUP_1G3
-          - 5.8GHz and 3.3GHz CLI presets
-
-          IMPORTANT:
-          Test without propeller.
-
-          After flashing:
-          1. Full Chip Erase.
-          2. Open CLI:
-             defaults
-             save
-
-          3. After reboot, do not touch the board for 15 seconds.
-
-          4. If board arrow points to tail, paste:
-             set mag_hardware = NONE
-             set align_board_roll = 0
-             set align_board_pitch = 0
-             set align_board_yaw = 1800
-             set gyro_zero_x = 0
-             set gyro_zero_y = 0
-             set gyro_zero_z = 0
-             set acczero_x = 0
-             set acczero_y = 0
-             set acczero_z = 0
-             set accgain_x = 4096
-             set accgain_y = 4096
-             set accgain_z = 4096
-             save
-
-          5. After reboot, do not touch the board for 15 seconds.
-          6. Calibrate accelerometer.
-          7. Check Setup.
-
-          Desired Setup movement:
-          - right wing down -> model right wing down
-          - left wing down -> model left wing down
-          - nose up -> model nose up
-          - nose down -> model nose down
-          - model must NOT slowly drift/turn by itself
-
-          If movement is inverted:
-          - do not fly
-          - try CW0_DEG next
-
-          If model still slowly drifts:
-          - do not fly
-          - try CW0_DEG or CW180_DEG next
-          EOF
-
-          ls -la ../../out
+          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_${VARIANT_NAME}.hex \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_${VARIANT_NAME}.bin \;
+          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_${VARIANT_NAME}.elf \;
+          ls -la out
 
       - name: Upload firmware
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-CW270
+          name: RUNA_F405_WING_v19_${{ matrix.name }}
           path: out/*
