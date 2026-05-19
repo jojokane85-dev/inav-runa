@@ -1,4 +1,4 @@
-name: Build RUNA F405 WING v19 MULTI AXIS TEST
+name: Build RUNA F405 WING v20 LSM6DSV INIT FIX
 
 on:
   workflow_dispatch:
@@ -8,45 +8,16 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: A_NORMAL_SCALE16
-            axis: A
-            scale: 16
-          - name: B_SWAP_XY_SCALE16
-            axis: B
-            scale: 16
-          - name: C_SWAP_XZ_SCALE16
-            axis: C
-            scale: 16
-          - name: D_SWAP_YZ_SCALE16
-            axis: D
-            scale: 16
-          - name: E_INVERT_Y_SCALE16
-            axis: E
-            scale: 16
-          - name: F_INVERT_Z_SCALE16
-            axis: F
-            scale: 16
-
-    env:
-      VARIANT_NAME: ${{ matrix.name }}
-      AXIS_MODE: ${{ matrix.axis }}
-      SCALE_DIV: ${{ matrix.scale }}
-
     steps:
       - name: Checkout INAV 7.1.2
         run: |
           git clone --recursive --branch 7.1.2 https://github.com/iNavFlight/inav.git inav
 
-      - name: Add RUNA target and patch LSM6DXX
+      - name: Add RUNA target
         run: |
           cd inav
 
-          echo "===== RUNA v19 variant: $VARIANT_NAME axis=$AXIS_MODE scale=$SCALE_DIV ====="
-
+          echo "===== Create RUNA_F405_WING target v20 from MATEKF405SE ====="
           rm -rf src/main/target/RUNA_F405_WING
           mkdir -p src/main/target/RUNA_F405_WING
 
@@ -56,16 +27,15 @@ jobs:
           target_stm32f405xg(RUNA_F405_WING)
           EOF
 
-          python3 <<'PY'
-          import os
-          from pathlib import Path
+          echo "===== Patch LSM6DXX driver: accept 0x70 + special init ====="
 
-          axis_mode = os.environ.get("AXIS_MODE", "A")
-          scale_div = os.environ.get("SCALE_DIV", "16")
+          python3 <<'PY'
+          from pathlib import Path
 
           p = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
           s = p.read_text()
 
+          # Add 0x70 ID. Likely LSM6DSV / LSM6DSV16X family.
           extra_defs = (
               "\n"
               "#ifndef LSM6DSV_CHIP_ID\n"
@@ -78,6 +48,7 @@ jobs:
               if marker in s:
                   s = s.replace(marker, marker + extra_defs)
 
+          # Accept 0x70 in detect switch.
           if "case LSM6DSV_CHIP_ID:" not in s:
               if "case LSM6DSL_CHIP_ID:" in s:
                   s = s.replace(
@@ -90,31 +61,114 @@ jobs:
                       "case LSM6DSO_CHIP_ID:\n            case LSM6DSV_CHIP_ID:"
                   )
 
-          if "static uint8_t runaLsm6dxxChipId" not in s:
-              s = s.replace(
-                  "#define LSM6DS3_CHIP_ID 0x69",
-                  "#define LSM6DS3_CHIP_ID 0x69\n\nstatic uint8_t runaLsm6dxxChipId = 0;"
+          # v20: special init for 0x70.
+          # Goal: stop pitch+yaw mixing caused by old LSM6DXX init on newer 0x70 chips.
+          if "RUNA_LSM6DSV_INIT_FIX_0x70" not in s:
+              old_config_start = (
+                  "    // Configure the accelerometer\n"
+                  "    // 833hz ODR, 16G scale, use LPF2 output (default with ODR/4 cutoff)\n"
+                  "    lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
+                  "\n"
+                  "    // Configure the gyro\n"
+                  "    // 6664hz ODR, 2000dps scale\n"
+                  "    lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (LSM6DXX_VAL_CTRL2_G_ODR6664 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
+                  "\n"
+                  "    // Configure control register 3\n"
+                  "    // latch LSB/MSB during reads; set interrupt pins active high; set interrupt pins push/pull; set 4-wire SPI; enable auto-increment burst reads\n"
+                  "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, (LSM6DXX_VAL_CTRL3_C_H_LACTIVE | LSM6DXX_VAL_CTRL3_C_PP_OD | LSM6DXX_VAL_CTRL3_C_SIM | LSM6DXX_VAL_CTRL3_C_IF_INC), 1);\n"
+                  "\n"
+                  "    // Configure control register 4\n"
+                  "    // enable accelerometer high performane mode; enable gyro LPF1\n"
+                  "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_DRDY_MASK | LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
+                  "\n"
+                  "    // Configure control register 6\n"
+                  "    // disable I2C interface; set gyro LPF1 cutoff according to gyro_hardware_lpf setting\n"
+                  "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, (lsm6dID == LSM6DSO_CHIP_ID? LSM6DXX_MASK_CTRL6_C:LSM6DSL_MASK_CTRL6_C), (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
+                  "\n"
+                  "    // Configure control register 7\n"
+                  "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, (LSM6DXX_VAL_CTRL7_G_HP_EN_G | LSM6DXX_VAL_CTRL7_G_HPM_G_16), 1);\n"
+                  "\n"
+                  "    // Configure control register 9\n"
+                  "    // disable I3C interface\n"
+                  "    if(lsm6dID == LSM6DSO_CHIP_ID)\n"
+                  "    {\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL9_XL, LSM6DXX_MASK_CTRL9_XL, LSM6DXX_VAL_CTRL9_XL_I3C_DISABLE, 1);\n"
+                  "    }\n"
               )
 
-          if "runaLsm6dxxChipId = tmp;" not in s:
-              s = s.replace(
-                  "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);",
-                  "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);\n        runaLsm6dxxChipId = tmp;"
+              new_config_start = (
+                  "    // RUNA_LSM6DSV_INIT_FIX_0x70\n"
+                  "    if (lsm6dID == LSM6DSV_CHIP_ID) {\n"
+                  "        // Safer lower-rate init for newer 0x70 LSM6DSV/LSM6DSV16X-like chip.\n"
+                  "        // ACC: 833 Hz, 16G, LPF2\n"
+                  "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
+                  "\n"
+                  "        // GYRO: 833 Hz instead of 6664 Hz, 2000 dps.\n"
+                  "        // 0x07 is the 833 Hz ODR code in LSM6 family register layout.\n"
+                  "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (0x07 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
+                  "\n"
+                  "        // CTRL3: 4-wire SPI + auto increment, no unusual latch combination.\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, (LSM6DXX_VAL_CTRL3_C_SIM | LSM6DXX_VAL_CTRL3_C_IF_INC), 1);\n"
+                  "\n"
+                  "        // CTRL4: mask DRDY + disable I2C + enable gyro LPF1.\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_DRDY_MASK | LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
+                  "\n"
+                  "        // CTRL6: use full LSM6DXX mask for 0x70 and selected gyro LPF.\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, LSM6DXX_MASK_CTRL6_C, (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
+                  "\n"
+                  "        // CTRL7: disable high-pass for diagnostic stability.\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, 0, 1);\n"
+                  "\n"
+                  "        // CTRL9: disable I3C for 0x70 too.\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL9_XL, LSM6DXX_MASK_CTRL9_XL, LSM6DXX_VAL_CTRL9_XL_I3C_DISABLE, 1);\n"
+                  "    } else {\n"
+                  "        // Configure the accelerometer\n"
+                  "        // 833hz ODR, 16G scale, use LPF2 output (default with ODR/4 cutoff)\n"
+                  "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
+                  "\n"
+                  "        // Configure the gyro\n"
+                  "        // 6664hz ODR, 2000dps scale\n"
+                  "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (LSM6DXX_VAL_CTRL2_G_ODR6664 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
+                  "\n"
+                  "        // Configure control register 3\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, (LSM6DXX_VAL_CTRL3_C_H_LACTIVE | LSM6DXX_VAL_CTRL3_C_PP_OD | LSM6DXX_VAL_CTRL3_C_SIM | LSM6DXX_VAL_CTRL3_C_IF_INC), 1);\n"
+                  "\n"
+                  "        // Configure control register 4\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_DRDY_MASK | LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
+                  "\n"
+                  "        // Configure control register 6\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, (lsm6dID == LSM6DSO_CHIP_ID? LSM6DXX_MASK_CTRL6_C:LSM6DSL_MASK_CTRL6_C), (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
+                  "\n"
+                  "        // Configure control register 7\n"
+                  "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, (LSM6DXX_VAL_CTRL7_G_HP_EN_G | LSM6DXX_VAL_CTRL7_G_HPM_G_16), 1);\n"
+                  "\n"
+                  "        // Configure control register 9\n"
+                  "        if(lsm6dID == LSM6DSO_CHIP_ID)\n"
+                  "        {\n"
+                  "            lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL9_XL, LSM6DXX_MASK_CTRL9_XL, LSM6DXX_VAL_CTRL9_XL_I3C_DISABLE, 1);\n"
+                  "        }\n"
+                  "    }\n"
               )
 
+              if old_config_start in s:
+                  s = s.replace(old_config_start, new_config_start)
+              else:
+                  print("WARNING: config block not found")
+
+          # v20 scale: /16 was closer than /32. Keep diagnostic scale correction.
           old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
           old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
 
           new_scale = (
-              "// RUNA_GYRO_SCALE_FIX_0x70\n"
-              f"    if (lsm6dID == LSM6DSV_CHIP_ID) {{\n"
-              f"        gyro->scale = 1.0f / (16.4f * {scale_div}.0f); // RUNA v19 scale\n"
+              "// RUNA_GYRO_SCALE_FIX_0x70_V20\n"
+              "    if (lsm6dID == LSM6DSV_CHIP_ID) {\n"
+              "        gyro->scale = 1.0f / (16.4f * 16.0f); // RUNA v20 scale for 0x70\n"
               "    } else {\n"
               "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
               "    }"
           )
 
-          if "RUNA_GYRO_SCALE_FIX_0x70" not in s:
+          if "RUNA_GYRO_SCALE_FIX_0x70_V20" not in s:
               if old_scale_1 in s:
                   s = s.replace(old_scale_1, new_scale)
               elif old_scale_2 in s:
@@ -122,73 +176,11 @@ jobs:
               else:
                   print("WARNING: gyro scale line not found")
 
-          old_raw = (
-              "gyro->gyroADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
-              "    gyro->gyroADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
-              "    gyro->gyroADCRaw[Z] = (float) int16_val_little_endian(data, 2);"
-          )
-
-          maps = {
-              "A": (
-                  "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
-                  "        gyro->gyroADCRaw[Y] = (float)runaGy;\n"
-                  "        gyro->gyroADCRaw[Z] = (float)runaGz;\n"
-              ),
-              "B": (
-                  "        gyro->gyroADCRaw[X] = (float)runaGy;\n"
-                  "        gyro->gyroADCRaw[Y] = (float)runaGx;\n"
-                  "        gyro->gyroADCRaw[Z] = (float)runaGz;\n"
-              ),
-              "C": (
-                  "        gyro->gyroADCRaw[X] = (float)runaGz;\n"
-                  "        gyro->gyroADCRaw[Y] = (float)runaGy;\n"
-                  "        gyro->gyroADCRaw[Z] = (float)runaGx;\n"
-              ),
-              "D": (
-                  "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
-                  "        gyro->gyroADCRaw[Y] = (float)runaGz;\n"
-                  "        gyro->gyroADCRaw[Z] = (float)runaGy;\n"
-              ),
-              "E": (
-                  "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
-                  "        gyro->gyroADCRaw[Y] = (float)-runaGy;\n"
-                  "        gyro->gyroADCRaw[Z] = (float)runaGz;\n"
-              ),
-              "F": (
-                  "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
-                  "        gyro->gyroADCRaw[Y] = (float)runaGy;\n"
-                  "        gyro->gyroADCRaw[Z] = (float)-runaGz;\n"
-              ),
-          }
-
-          axis_map = maps.get(axis_mode, maps["A"])
-
-          new_raw = (
-              "// RUNA_GYRO_AXIS_MAP_0x70\n"
-              "    int16_t runaGx = int16_val_little_endian(data, 0);\n"
-              "    int16_t runaGy = int16_val_little_endian(data, 1);\n"
-              "    int16_t runaGz = int16_val_little_endian(data, 2);\n\n"
-              "    if (runaLsm6dxxChipId == LSM6DSV_CHIP_ID) {\n"
-              f"        // RUNA axis mode {axis_mode}\n"
-              f"{axis_map}"
-              "    } else {\n"
-              "        gyro->gyroADCRaw[X] = (float)runaGx;\n"
-              "        gyro->gyroADCRaw[Y] = (float)runaGy;\n"
-              "        gyro->gyroADCRaw[Z] = (float)runaGz;\n"
-              "    }"
-          )
-
-          if "RUNA_GYRO_AXIS_MAP_0x70" not in s:
-              if old_raw in s:
-                  s = s.replace(old_raw, new_raw)
-              else:
-                  print("WARNING: gyro raw read block not found")
-
           p.write_text(s)
           PY
 
           echo "===== PATCHED LSM6DXX snippets ====="
-          grep -nE "LSM6DSV_CHIP_ID|case LSM6D|RUNA_GYRO_SCALE_FIX|RUNA_GYRO_AXIS_MAP|gyro->scale|gyroADCRaw|WHO_AM_I" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+          grep -nE "LSM6DSV_CHIP_ID|case LSM6D|RUNA_LSM6DSV_INIT_FIX|RUNA_GYRO_SCALE_FIX|gyro->scale|CTRL1_XL|CTRL2_G|CTRL3_C|CTRL4_C|CTRL6_C|CTRL7_G|CTRL9_XL|WHO_AM_I" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
           # Board name
           sed -i '/TARGET_BOARD_IDENTIFIER/d' src/main/target/RUNA_F405_WING/target.h || true
@@ -248,7 +240,9 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v19 multi-axis test
+           * RUNA_F405_WING v20
+           * Base: MATEKF405SE
+           * IMU: LSM6DXX / 0x70 with special init fix.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -385,7 +379,7 @@ jobs:
           const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
           EOF
 
-          echo "===== FINAL RUNA v19 target.h snippets ====="
+          echo "===== FINAL RUNA v20 target.h snippets ====="
           grep -nE "RUNA|TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|LSM6|IMU|BARO|MAG|MAX7456|SPI1|SPI2|SPI3|I2C1|UART1|UART6|PINIO|BEEPER|SDCARD|ADC|DMA" src/main/target/RUNA_F405_WING/target.h || true
 
       - name: Install dependencies
@@ -410,16 +404,16 @@ jobs:
           echo "Built firmware files:"
           find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
 
-      - name: Rename firmware with variant name
+      - name: Rename firmware
         run: |
           mkdir -p out
-          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_${VARIANT_NAME}.hex \;
-          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_${VARIANT_NAME}.bin \;
-          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_${VARIANT_NAME}.elf \;
+          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v20_LSM6DSV_INIT_FIX.hex \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v20_LSM6DSV_INIT_FIX.bin \;
+          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v20_LSM6DSV_INIT_FIX.elf \;
           ls -la out
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_F405_WING_v19_${{ matrix.name }}
+          name: RUNA_F405_WING_v20_LSM6DSV_INIT_FIX
           path: out/*
