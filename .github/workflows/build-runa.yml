@@ -1,4 +1,4 @@
-name: Build RUNA F405 WING v24 LSM6DSV16X BF INIT FIXED
+name: Build RUNA F405 WING v25 LSM6DSV16X BF INIT GYRO BUSDEV
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
         run: |
           cd inav
 
-          echo "===== Create RUNA_F405_WING target v24 from MATEKF405SE ====="
+          echo "===== Create RUNA_F405_WING target v25 from MATEKF405SE ====="
           rm -rf src/main/target/RUNA_F405_WING
           mkdir -p src/main/target/RUNA_F405_WING
 
@@ -27,7 +27,7 @@ jobs:
           target_stm32f405xg(RUNA_F405_WING)
           EOF
 
-          echo "===== Patch LSM6DXX driver: LSM6DSV16X 0x70 Betaflight-style init fixed busDev ====="
+          echo "===== Patch LSM6DXX driver: LSM6DSV16X 0x70 BF-style init using gyro->busDev ====="
 
           python3 <<'PY'
           from pathlib import Path
@@ -37,7 +37,7 @@ jobs:
 
           extra_defs = (
               "\n"
-              "/* RUNA v24: LSM6DSV16X / 0x70 support */\n"
+              "/* RUNA v25: LSM6DSV16X / 0x70 support */\n"
               "#ifndef LSM6DSV16X_CHIP_ID\n"
               "#define LSM6DSV16X_CHIP_ID 0x70\n"
               "#endif\n"
@@ -126,7 +126,7 @@ jobs:
                       "case LSM6DSO_CHIP_ID:\n            case LSM6DSV16X_CHIP_ID:"
                   )
 
-          # Save detected chip ID globally for read path if needed.
+          # Save detected chip ID globally.
           if "static uint8_t runaLsm6dxxChipId" not in s:
               s = s.replace(
                   "#define LSM6DS3_CHIP_ID 0x69",
@@ -143,20 +143,20 @@ jobs:
           old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
 
           init_and_scale = (
-              "// RUNA_LSM6DSV16X_BF_STYLE_INIT_V24\n"
+              "// RUNA_LSM6DSV16X_BF_STYLE_INIT_V25\n"
               "    if (lsm6dID == LSM6DSV16X_CHIP_ID) {\n"
               "        /* Interface: 4-wire SPI, disable I2C/I3C, auto-increment */\n"
-              "        lsm6dxxWriteRegister(busDev, LSM6DSV_IF_CFG, LSM6DSV_IF_CFG_SIM | LSM6DSV_IF_CFG_I2C_I3C_DISABLE, 1);\n"
-              "        lsm6dxxWriteRegister(busDev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_BDU | LSM6DSV_CTRL3_IF_INC, 1);\n"
+              "        lsm6dxxWriteRegister(gyro->busDev, LSM6DSV_IF_CFG, LSM6DSV_IF_CFG_SIM | LSM6DSV_IF_CFG_I2C_I3C_DISABLE, 1);\n"
+              "        lsm6dxxWriteRegister(gyro->busDev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_BDU | LSM6DSV_CTRL3_IF_INC, 1);\n"
               "\n"
               "        /* ACC: high performance, 1000 Hz, 16G */\n"
-              "        lsm6dxxWriteRegister(busDev, LSM6DSV_CTRL1, (LSM6DSV_CTRL1_OP_MODE_XL_HIGH_PERF << 4) | LSM6DSV_CTRL1_ODR_XL_1000HZ, 1);\n"
-              "        lsm6dxxWriteRegister(busDev, LSM6DSV_CTRL8, LSM6DSV_CTRL8_FS_XL_16G, 1);\n"
+              "        lsm6dxxWriteRegister(gyro->busDev, LSM6DSV_CTRL1, (LSM6DSV_CTRL1_OP_MODE_XL_HIGH_PERF << 4) | LSM6DSV_CTRL1_ODR_XL_1000HZ, 1);\n"
+              "        lsm6dxxWriteRegister(gyro->busDev, LSM6DSV_CTRL8, LSM6DSV_CTRL8_FS_XL_16G, 1);\n"
               "\n"
               "        /* GYRO: high performance, 1000 Hz, 2000 dps, LPF enabled */\n"
-              "        lsm6dxxWriteRegister(busDev, LSM6DSV_CTRL2, (LSM6DSV_CTRL2_OP_MODE_G_HIGH_PERF << 4) | LSM6DSV_CTRL2_ODR_G_1000HZ, 1);\n"
-              "        lsm6dxxWriteRegister(busDev, LSM6DSV_CTRL6, (LSM6DSV_CTRL6_LPF1_G_BW_215HZ << 4) | LSM6DSV_CTRL6_FS_G_2000DPS, 1);\n"
-              "        lsm6dxxWriteRegister(busDev, LSM6DSV_CTRL7, LSM6DSV_CTRL7_LPF1_G_EN, 1);\n"
+              "        lsm6dxxWriteRegister(gyro->busDev, LSM6DSV_CTRL2, (LSM6DSV_CTRL2_OP_MODE_G_HIGH_PERF << 4) | LSM6DSV_CTRL2_ODR_G_1000HZ, 1);\n"
+              "        lsm6dxxWriteRegister(gyro->busDev, LSM6DSV_CTRL6, (LSM6DSV_CTRL6_LPF1_G_BW_215HZ << 4) | LSM6DSV_CTRL6_FS_G_2000DPS, 1);\n"
+              "        lsm6dxxWriteRegister(gyro->busDev, LSM6DSV_CTRL7, LSM6DSV_CTRL7_LPF1_G_EN, 1);\n"
               "\n"
               "        gyro->scale = 1.0f / 16.4f; // LSM6DSV16X 2000 dps\n"
               "    } else {\n"
@@ -164,7 +164,7 @@ jobs:
               "    }"
           )
 
-          if "RUNA_LSM6DSV16X_BF_STYLE_INIT_V24" not in s:
+          if "RUNA_LSM6DSV16X_BF_STYLE_INIT_V25" not in s:
               if old_scale_1 in s:
                   s = s.replace(old_scale_1, init_and_scale)
               elif old_scale_2 in s:
@@ -176,7 +176,7 @@ jobs:
           PY
 
           echo "===== PATCHED LSM6DXX snippets ====="
-          grep -nE "LSM6DSV16X|RUNA_LSM6DSV16X_BF_STYLE_INIT|case LSM6D|gyro->scale|LSM6DSV_CTRL|LSM6DSV_IF_CFG|WHO_AM_I|busDev" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+          grep -nE "LSM6DSV16X|RUNA_LSM6DSV16X_BF_STYLE_INIT|case LSM6D|gyro->scale|LSM6DSV_CTRL|LSM6DSV_IF_CFG|WHO_AM_I|gyro->busDev" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
           echo "===== Patch RUNA target.h ====="
 
@@ -231,9 +231,9 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v24
+           * RUNA_F405_WING v25
            * Base: MATEKF405SE
-           * IMU: LSM6DSV16X-like 0x70 via BF-style init fixed busDev.
+           * IMU: LSM6DSV16X-like 0x70 via BF-style init using gyro->busDev.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -370,7 +370,7 @@ jobs:
           const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
           EOF
 
-          echo "===== FINAL RUNA v24 target.h snippets ====="
+          echo "===== FINAL RUNA v25 target.h snippets ====="
           grep -nE "RUNA|TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|LSM6|IMU|BARO|MAG|MAX7456|SPI1|SPI2|SPI3|I2C1|UART1|UART6|PINIO|BEEPER|SDCARD|ADC|DMA" src/main/target/RUNA_F405_WING/target.h || true
 
       - name: Install dependencies
@@ -398,13 +398,13 @@ jobs:
       - name: Rename firmware
         run: |
           mkdir -p out
-          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v24_LSM6DSV16X_BF_INIT_FIXED.hex \;
-          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v24_LSM6DSV16X_BF_INIT_FIXED.bin \;
-          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v24_LSM6DSV16X_BF_INIT_FIXED.elf \;
+          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v25_LSM6DSV16X_BF_INIT_GYRO_BUSDEV.hex \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v25_LSM6DSV16X_BF_INIT_GYRO_BUSDEV.bin \;
+          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v25_LSM6DSV16X_BF_INIT_GYRO_BUSDEV.elf \;
           ls -la out
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_F405_WING_v24_LSM6DSV16X_BF_INIT_FIXED
+          name: RUNA_F405_WING_v25_LSM6DSV16X_BF_INIT_GYRO_BUSDEV
           path: out/*
