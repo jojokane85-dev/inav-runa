@@ -1,4 +1,4 @@
-name: RUNA v28 INAV 8.0.1 PORT BF LSM6DSV16X DIAGNOSTIC
+name: RUNA v29 INAV 8.0.1 FORCE COMPILE BF LSM6DSV16X
 
 on:
   workflow_dispatch:
@@ -25,17 +25,18 @@ jobs:
           cp ../betaflight/src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.c src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.c
           cp ../betaflight/src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.h src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.h
 
-          echo "===== Show copied files ====="
+          echo "===== Copied files ====="
           ls -la src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.*
 
-          echo "===== Driver important lines ====="
-          grep -nE "USE_ACCGYRO_LSM6DSV16X|LSM6DSV16X|WHO_AM_I|detect|Detect|init|Init|read|Read|gyro|acc|OUTX|CTRL1|CTRL2|CTRL6|CTRL7|CTRL8|IF_CFG" src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.c || true
+          echo "===== Driver includes/functions ====="
+          grep -nE "#include|LSM6DSV16X|WHO_AM_I|detect|Detect|init|Init|read|Read|gyro|acc|OUTX|CTRL|IF_CFG" src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.c || true
+          grep -nE "#include|LSM6DSV16X|WHO_AM_I|detect|Detect|init|Init|read|Read|gyro|acc|OUTX|CTRL|IF_CFG" src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.h || true
 
-      - name: Create RUNA_F405_WING target for INAV 8.0.1
+      - name: Create RUNA_F405_WING target and force driver source
         run: |
           cd inav
 
-          echo "===== Create RUNA_F405_WING target v28 ====="
+          echo "===== Create RUNA_F405_WING target v29 ====="
           rm -rf src/main/target/RUNA_F405_WING
           mkdir -p src/main/target/RUNA_F405_WING
 
@@ -43,7 +44,17 @@ jobs:
 
           cat > src/main/target/RUNA_F405_WING/CMakeLists.txt <<'EOF'
           target_stm32f405xg(RUNA_F405_WING)
+
+          # RUNA v29 diagnostic:
+          # force compile Betaflight LSM6DSV16X driver.
+          # If this fails, errors will show what must be adapted for INAV.
+          target_sources(RUNA_F405_WING.elf PRIVATE
+              ../../drivers/accgyro/accgyro_spi_lsm6dsv16x.c
+          )
           EOF
+
+          echo "===== RUNA CMakeLists.txt ====="
+          cat src/main/target/RUNA_F405_WING/CMakeLists.txt
 
           echo "===== Clean old target defines ====="
 
@@ -98,9 +109,9 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v28
-           * INAV 8.0.1 + Betaflight LSM6DSV16X driver port diagnostic.
-           * DO NOT FLASH if it builds. This is for compile-port errors.
+           * RUNA_F405_WING v29
+           * INAV 8.0.1 + forced compile Betaflight LSM6DSV16X driver.
+           * DO NOT FLASH if it builds. This is compile-port diagnostic.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -125,8 +136,8 @@ jobs:
           #define SPI1_MOSI_PIN PA7
 
           /*
-           * Betaflight driver define.
-           * It may not compile yet in INAV. That is expected for v28.
+           * BF LSM6DSV16X driver symbols.
+           * These may need adaptation in v30.
            */
           #define USE_ACCGYRO_LSM6DSV16X
           #define USE_IMU_LSM6DSV16X
@@ -136,8 +147,7 @@ jobs:
           #define IMU_LSM6DSV16X_ALIGN CW0_DEG
 
           /*
-           * Keep old INAV LSM6DXX disabled here.
-           * We want compile errors from the real BF driver port.
+           * Keep INAV old LSM6DXX disabled.
            */
           // #define USE_IMU_LSM6DXX
           // #define IMU_LSM6DXX_ALIGN CW0_DEG
@@ -252,7 +262,7 @@ jobs:
           const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
           EOF
 
-          echo "===== Final RUNA v28 target snippets ====="
+          echo "===== Final RUNA v29 target snippets ====="
           grep -nE "RUNA|LSM6DSV|ACCGYRO|IMU|SPI1|BARO|MAG|MAX7456|UART1|UART6|ADC|BEEPER" src/main/target/RUNA_F405_WING/target.h || true
 
       - name: Try configure
@@ -267,6 +277,15 @@ jobs:
           cd inav/build
           make RUNA_F405_WING -j$(nproc)
 
+      - name: Check whether BF driver was compiled
+        if: always()
+        run: |
+          echo "===== Search build tree for lsm6dsv16x objects ====="
+          find inav/build -type f | grep -i "lsm6dsv" || true
+
+          echo "===== Search generated build files for lsm6dsv16x ====="
+          grep -R "accgyro_spi_lsm6dsv16x" -n inav/build || true
+
       - name: Collect diagnostic files
         if: always()
         run: |
@@ -275,12 +294,12 @@ jobs:
           cp inav/src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.c diagnostic/ || true
           cp inav/src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.h diagnostic/ || true
 
-          echo "===== Find firmware if build somehow succeeded ====="
+          echo "===== Find firmware if build succeeded ====="
           find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
 
       - name: Upload diagnostic artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_v28_INAV801_BF_LSM6DSV16X_PORT_DIAGNOSTIC
+          name: RUNA_v29_INAV801_FORCE_COMPILE_BF_LSM6DSV16X
           path: diagnostic/*
