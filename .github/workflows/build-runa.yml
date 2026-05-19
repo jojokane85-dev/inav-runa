@@ -1,4 +1,4 @@
-name: RUNA v29 INAV 8.0.1 FORCE COMPILE BF LSM6DSV16X
+name: RUNA v30 INAV 8.0.1 LSM6DSV16X INAV WRAPPER
 
 on:
   workflow_dispatch:
@@ -9,34 +9,15 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout INAV 8.0.1 and Betaflight 4.5.1
+      - name: Checkout INAV 8.0.1
         run: |
-          echo "===== Clone INAV 8.0.1 ====="
           git clone --recursive --branch 8.0.1 https://github.com/iNavFlight/inav.git inav
 
-          echo "===== Clone Betaflight 4.5.1 ====="
-          git clone --recursive --branch 4.5.1 https://github.com/betaflight/betaflight.git betaflight
-
-      - name: Copy Betaflight LSM6DSV16X driver into INAV
+      - name: Create RUNA target and patch LSM6DXX for LSM6DSV16X
         run: |
           cd inav
 
-          echo "===== Copy BF LSM6DSV16X driver files ====="
-          cp ../betaflight/src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.c src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.c
-          cp ../betaflight/src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.h src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.h
-
-          echo "===== Copied files ====="
-          ls -la src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.*
-
-          echo "===== Driver includes/functions ====="
-          grep -nE "#include|LSM6DSV16X|WHO_AM_I|detect|Detect|init|Init|read|Read|gyro|acc|OUTX|CTRL|IF_CFG" src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.c || true
-          grep -nE "#include|LSM6DSV16X|WHO_AM_I|detect|Detect|init|Init|read|Read|gyro|acc|OUTX|CTRL|IF_CFG" src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.h || true
-
-      - name: Create RUNA_F405_WING target and force driver source
-        run: |
-          cd inav
-
-          echo "===== Create RUNA_F405_WING target v29 ====="
+          echo "===== Create RUNA_F405_WING target v30 ====="
           rm -rf src/main/target/RUNA_F405_WING
           mkdir -p src/main/target/RUNA_F405_WING
 
@@ -44,19 +25,168 @@ jobs:
 
           cat > src/main/target/RUNA_F405_WING/CMakeLists.txt <<'EOF'
           target_stm32f405xg(RUNA_F405_WING)
-
-          # RUNA v29 diagnostic:
-          # force compile Betaflight LSM6DSV16X driver.
-          # If this fails, errors will show what must be adapted for INAV.
-          target_sources(RUNA_F405_WING.elf PRIVATE
-              ../../drivers/accgyro/accgyro_spi_lsm6dsv16x.c
-          )
           EOF
 
-          echo "===== RUNA CMakeLists.txt ====="
-          cat src/main/target/RUNA_F405_WING/CMakeLists.txt
+          echo "===== Patch INAV accgyro_lsm6dxx.c for 0x70 LSM6DSV16X ====="
 
-          echo "===== Clean old target defines ====="
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
+          s = p.read_text()
+
+          # ------------------------------------------------------------
+          # 1. Add chip ID 0x70 and global saved chip id.
+          # ------------------------------------------------------------
+          if "RUNA_LSM6DSV16X_CHIP_ID" not in s:
+              marker = "#define LSM6DS3_CHIP_ID 0x69"
+              insert = (
+                  "#define LSM6DS3_CHIP_ID 0x69\n"
+                  "\n"
+                  "/* RUNA v30: LSM6DSV16X / 0x70 support inside INAV LSM6DXX wrapper */\n"
+                  "#define RUNA_LSM6DSV16X_CHIP_ID 0x70\n"
+                  "\n"
+                  "static uint8_t runaLsm6dxxChipId = 0;\n"
+              )
+              if marker in s:
+                  s = s.replace(marker, insert)
+
+          # ------------------------------------------------------------
+          # 2. Accept 0x70 in detect switch.
+          # ------------------------------------------------------------
+          if "case RUNA_LSM6DSV16X_CHIP_ID:" not in s:
+              if "case LSM6DSL_CHIP_ID:" in s:
+                  s = s.replace(
+                      "case LSM6DSL_CHIP_ID:",
+                      "case LSM6DSL_CHIP_ID:\n            case RUNA_LSM6DSV16X_CHIP_ID:"
+                  )
+              elif "case LSM6DSO_CHIP_ID:" in s:
+                  s = s.replace(
+                      "case LSM6DSO_CHIP_ID:",
+                      "case LSM6DSO_CHIP_ID:\n            case RUNA_LSM6DSV16X_CHIP_ID:"
+                  )
+
+          # ------------------------------------------------------------
+          # 3. Save chip id after WHO_AM_I read.
+          # ------------------------------------------------------------
+          if "runaLsm6dxxChipId = tmp;" not in s:
+              s = s.replace(
+                  "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);",
+                  "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);\n        runaLsm6dxxChipId = tmp;"
+              )
+
+          # ------------------------------------------------------------
+          # 4. Safer init for 0x70.
+          # This does NOT use Betaflight bus/extDevice_t.
+          # It keeps INAV bus API only.
+          # ------------------------------------------------------------
+          old_init = (
+              "    // Configure the accelerometer\n"
+              "    // 833hz ODR, 16G scale, use LPF2 output (default with ODR/4 cutoff)\n"
+              "    lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
+              "\n"
+              "    // Configure the gyro\n"
+              "    // 6664hz ODR, 2000dps scale\n"
+              "    lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (LSM6DXX_VAL_CTRL2_G_ODR6664 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
+              "\n"
+              "    // Configure control register 3\n"
+              "    // latch LSB/MSB during reads; set interrupt pins active high; set interrupt pins push/pull; set 4-wire SPI; enable auto-increment burst reads\n"
+              "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, (LSM6DXX_VAL_CTRL3_C_H_LACTIVE | LSM6DXX_VAL_CTRL3_C_PP_OD | LSM6DXX_VAL_CTRL3_C_SIM | LSM6DXX_VAL_CTRL3_C_IF_INC), 1);\n"
+              "\n"
+              "    // Configure control register 4\n"
+              "    // enable accelerometer high performane mode; enable gyro LPF1\n"
+              "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_DRDY_MASK | LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
+              "\n"
+              "    // Configure control register 6\n"
+              "    // disable I2C interface; set gyro LPF1 cutoff according to gyro_hardware_lpf setting\n"
+              "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, (lsm6dID == LSM6DSO_CHIP_ID? LSM6DXX_MASK_CTRL6_C:LSM6DSL_MASK_CTRL6_C), (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
+              "\n"
+              "    // Configure control register 7\n"
+              "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, (LSM6DXX_VAL_CTRL7_G_HP_EN_G | LSM6DXX_VAL_CTRL7_G_HPM_G_16), 1);\n"
+          )
+
+          new_init = (
+              "    // RUNA_LSM6DSV16X_INIT_V30\n"
+              "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
+              "        // ACC: 833Hz, 16G, LPF2. Keep close to INAV LSM6DXX path.\n"
+              "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
+              "\n"
+              "        // GYRO: lower ODR than old 6664Hz path, 2000dps.\n"
+              "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
+              "\n"
+              "        // CTRL3: enable auto increment, 4-wire SPI.\n"
+              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, LSM6DXX_VAL_CTRL3_C_IF_INC, 1);\n"
+              "\n"
+              "        // CTRL4: disable I2C, enable gyro LPF1.\n"
+              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
+              "\n"
+              "        // CTRL6: use full mask for 0x70.\n"
+              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, LSM6DXX_MASK_CTRL6_C, (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
+              "\n"
+              "        // CTRL7: no HPF for diagnostic stability.\n"
+              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, 0, 1);\n"
+              "\n"
+              "        // CTRL9: disable I3C if register exists on this chip.\n"
+              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL9_XL, LSM6DXX_MASK_CTRL9_XL, LSM6DXX_VAL_CTRL9_XL_I3C_DISABLE, 1);\n"
+              "    } else {\n"
+              "        // Configure the accelerometer\n"
+              "        // 833hz ODR, 16G scale, use LPF2 output (default with ODR/4 cutoff)\n"
+              "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
+              "\n"
+              "        // Configure the gyro\n"
+              "        // 6664hz ODR, 2000dps scale\n"
+              "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (LSM6DXX_VAL_CTRL2_G_ODR6664 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
+              "\n"
+              "        // Configure control register 3\n"
+              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, (LSM6DXX_VAL_CTRL3_C_H_LACTIVE | LSM6DXX_VAL_CTRL3_C_PP_OD | LSM6DXX_VAL_CTRL3_C_SIM | LSM6DXX_VAL_CTRL3_C_IF_INC), 1);\n"
+              "\n"
+              "        // Configure control register 4\n"
+              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_DRDY_MASK | LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
+              "\n"
+              "        // Configure control register 6\n"
+              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, (lsm6dID == LSM6DSO_CHIP_ID? LSM6DXX_MASK_CTRL6_C:LSM6DSL_MASK_CTRL6_C), (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
+              "\n"
+              "        // Configure control register 7\n"
+              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, (LSM6DXX_VAL_CTRL7_G_HP_EN_G | LSM6DXX_VAL_CTRL7_G_HPM_G_16), 1);\n"
+              "    }\n"
+          )
+
+          if "RUNA_LSM6DSV16X_INIT_V30" not in s:
+              if old_init in s:
+                  s = s.replace(old_init, new_init)
+              else:
+                  print("WARNING: exact init block not found")
+
+          # ------------------------------------------------------------
+          # 5. Scale: keep normal scale first. If gyro too fast, later v31 /16.
+          # ------------------------------------------------------------
+          old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
+          old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
+
+          new_scale = (
+              "// RUNA_GYRO_SCALE_V30\n"
+              "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
+              "        gyro->scale = 1.0f / 16.4f; // RUNA v30: start with native 2000dps scale\n"
+              "    } else {\n"
+              "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
+              "    }"
+          )
+
+          if "RUNA_GYRO_SCALE_V30" not in s:
+              if old_scale_1 in s:
+                  s = s.replace(old_scale_1, new_scale)
+              elif old_scale_2 in s:
+                  s = s.replace(old_scale_2, new_scale)
+              else:
+                  print("WARNING: gyro scale line not found")
+
+          p.write_text(s)
+          PY
+
+          echo "===== Check patched lsm6dxx snippets ====="
+          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE|case RUNA|WHO_AM_I|CTRL1_XL|CTRL2_G|CTRL3_C|CTRL4_C|CTRL6_C|CTRL7_G|CTRL9_XL|gyro->scale" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+
+          echo "===== Patch RUNA target.h ====="
 
           sed -i '/TARGET_BOARD_IDENTIFIER/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/USBD_PRODUCT_STRING/d' src/main/target/RUNA_F405_WING/target.h || true
@@ -109,9 +239,9 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v29
-           * INAV 8.0.1 + forced compile Betaflight LSM6DSV16X driver.
-           * DO NOT FLASH if it builds. This is compile-port diagnostic.
+           * RUNA_F405_WING v30
+           * INAV 8.0.1
+           * LSM6DSV16X/0x70 through patched INAV LSM6DXX wrapper.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -135,24 +265,10 @@ jobs:
           #undef SPI1_MOSI_PIN
           #define SPI1_MOSI_PIN PA7
 
-          /*
-           * BF LSM6DSV16X driver symbols.
-           * These may need adaptation in v30.
-           */
-          #define USE_ACCGYRO_LSM6DSV16X
-          #define USE_IMU_LSM6DSV16X
-
-          #define LSM6DSV16X_CS_PIN SPI1_NSS_PIN
-          #define LSM6DSV16X_SPI_BUS BUS_SPI1
-          #define IMU_LSM6DSV16X_ALIGN CW0_DEG
-
-          /*
-           * Keep INAV old LSM6DXX disabled.
-           */
-          // #define USE_IMU_LSM6DXX
-          // #define IMU_LSM6DXX_ALIGN CW0_DEG
-          // #define LSM6DXX_CS_PIN SPI1_NSS_PIN
-          // #define LSM6DXX_SPI_BUS BUS_SPI1
+          #define USE_IMU_LSM6DXX
+          #define IMU_LSM6DXX_ALIGN CW0_DEG
+          #define LSM6DXX_CS_PIN SPI1_NSS_PIN
+          #define LSM6DXX_SPI_BUS BUS_SPI1
 
           #define USE_I2C
           #define USE_I2C_DEVICE_1
@@ -262,44 +378,36 @@ jobs:
           const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
           EOF
 
-          echo "===== Final RUNA v29 target snippets ====="
-          grep -nE "RUNA|LSM6DSV|ACCGYRO|IMU|SPI1|BARO|MAG|MAX7456|UART1|UART6|ADC|BEEPER" src/main/target/RUNA_F405_WING/target.h || true
+          echo "===== Final RUNA v30 target snippets ====="
+          grep -nE "RUNA|LSM6DXX|IMU|SPI1|BARO|MAG|MAX7456|UART1|UART6|ADC|BEEPER" src/main/target/RUNA_F405_WING/target.h || true
 
-      - name: Try configure
+      - name: Configure
         run: |
           cd inav
           mkdir -p build
           cd build
           cmake ..
 
-      - name: Try build RUNA_F405_WING
+      - name: Build RUNA_F405_WING
         run: |
           cd inav/build
           make RUNA_F405_WING -j$(nproc)
 
-      - name: Check whether BF driver was compiled
-        if: always()
+      - name: Find firmware
         run: |
-          echo "===== Search build tree for lsm6dsv16x objects ====="
-          find inav/build -type f | grep -i "lsm6dsv" || true
+          echo "Built firmware files:"
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
 
-          echo "===== Search generated build files for lsm6dsv16x ====="
-          grep -R "accgyro_spi_lsm6dsv16x" -n inav/build || true
-
-      - name: Collect diagnostic files
-        if: always()
+      - name: Rename firmware
         run: |
-          mkdir -p diagnostic
-          cp -r inav/src/main/target/RUNA_F405_WING diagnostic/RUNA_F405_WING_target || true
-          cp inav/src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.c diagnostic/ || true
-          cp inav/src/main/drivers/accgyro/accgyro_spi_lsm6dsv16x.h diagnostic/ || true
+          mkdir -p out
+          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v30_INAV801_LSM6DSV16X_WRAPPER.hex \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v30_INAV801_LSM6DSV16X_WRAPPER.bin \;
+          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v30_INAV801_LSM6DSV16X_WRAPPER.elf \;
+          ls -la out
 
-          echo "===== Find firmware if build succeeded ====="
-          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
-
-      - name: Upload diagnostic artifact
-        if: always()
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_v29_INAV801_FORCE_COMPILE_BF_LSM6DSV16X
-          path: diagnostic/*
+          name: RUNA_F405_WING_v30_INAV801_LSM6DSV16X_WRAPPER
+          path: out/*
