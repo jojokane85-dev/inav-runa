@@ -1,4 +1,4 @@
-name: Build RUNA F405 WING v21 FIND LSM6DSV DRIVER
+name: Build RUNA F405 WING v22 LSM6DSV16X GYRO REG FIX
 
 on:
   workflow_dispatch:
@@ -9,35 +9,15 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout sources
+      - name: Checkout INAV 7.1.2
         run: |
-          echo "===== Clone INAV 7.1.2 ====="
           git clone --recursive --branch 7.1.2 https://github.com/iNavFlight/inav.git inav
 
-          echo "===== Clone Betaflight 4.5.1 ====="
-          git clone --recursive --branch 4.5.1 https://github.com/betaflight/betaflight.git betaflight
-
-      - name: Search LSM6DSV / LSM6DSV16X drivers
-        run: |
-          echo "===== Search in Betaflight drivers ====="
-          find betaflight/src/main -type f | grep -i -E "lsm6|dsv|dsv16|accgyro" || true
-
-          echo "===== Grep USE_GYRO / USE_ACC / LSM6DSV ====="
-          grep -R "LSM6DSV" -n betaflight/src/main || true
-          grep -R "LSM6DSV16X" -n betaflight/src/main || true
-          grep -R "USE_GYRO_LSM6" -n betaflight/src/main || true
-          grep -R "USE_ACC_LSM6" -n betaflight/src/main || true
-          grep -R "USE_IMU_LSM6" -n betaflight/src/main || true
-
-          echo "===== Search INAV existing LSM6 drivers ====="
-          find inav/src/main/drivers -type f | grep -i "lsm6" || true
-          grep -R "USE_IMU_LSM6" -n inav/src/main || true
-
-      - name: Create current RUNA target skeleton
+      - name: Add RUNA target
         run: |
           cd inav
 
-          echo "===== Create RUNA_F405_WING target skeleton ====="
+          echo "===== Create RUNA_F405_WING target v22 from MATEKF405SE ====="
           rm -rf src/main/target/RUNA_F405_WING
           mkdir -p src/main/target/RUNA_F405_WING
 
@@ -47,11 +27,123 @@ jobs:
           target_stm32f405xg(RUNA_F405_WING)
           EOF
 
-          echo "===== Patch target.h only, no risky driver yet ====="
+          echo "===== Patch LSM6DXX driver: 0x70 + correct gyro output registers ====="
 
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
+          s = p.read_text()
+
+          # Add LSM6DSV / LSM6DSV16X ID.
+          extra_defs = (
+              "\n"
+              "#ifndef LSM6DSV_CHIP_ID\n"
+              "#define LSM6DSV_CHIP_ID 0x70\n"
+              "#endif\n"
+              "\n"
+              "/* RUNA v22: LSM6DSV16X UI/OIS/EIS gyro output registers from Betaflight driver */\n"
+              "#ifndef LSM6DSV_UI_OUTX_L_G_OIS_EIS\n"
+              "#define LSM6DSV_UI_OUTX_L_G_OIS_EIS 0x2E\n"
+              "#endif\n"
+          )
+
+          if "LSM6DSV_CHIP_ID" not in s:
+              marker = "#define LSM6DS3_CHIP_ID 0x69"
+              if marker in s:
+                  s = s.replace(marker, marker + extra_defs)
+
+          # Accept 0x70 in detect switch.
+          if "case LSM6DSV_CHIP_ID:" not in s:
+              if "case LSM6DSL_CHIP_ID:" in s:
+                  s = s.replace(
+                      "case LSM6DSL_CHIP_ID:",
+                      "case LSM6DSL_CHIP_ID:\n            case LSM6DSV_CHIP_ID:"
+                  )
+              elif "case LSM6DSO_CHIP_ID:" in s:
+                  s = s.replace(
+                      "case LSM6DSO_CHIP_ID:",
+                      "case LSM6DSO_CHIP_ID:\n            case LSM6DSV_CHIP_ID:"
+                  )
+
+          # Save detected chip ID globally.
+          if "static uint8_t runaLsm6dxxChipId" not in s:
+              s = s.replace(
+                  "#define LSM6DS3_CHIP_ID 0x69",
+                  "#define LSM6DS3_CHIP_ID 0x69\n\nstatic uint8_t runaLsm6dxxChipId = 0;"
+              )
+
+          if "runaLsm6dxxChipId = tmp;" not in s:
+              s = s.replace(
+                  "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);",
+                  "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);\n        runaLsm6dxxChipId = tmp;"
+              )
+
+          # Patch gyro read register.
+          # Old INAV reads gyro from normal LSM6DXX OUTX_L_G.
+          # For 0x70 LSM6DSV16X we try UI/OIS/EIS gyro output starting at 0x2E.
+          if "RUNA_LSM6DSV16X_GYRO_REG_FIX_V22" not in s:
+              old1 = "busReadBuf(dev, LSM6DXX_REG_OUTX_L_G, data, 6);"
+              new1 = (
+                  "// RUNA_LSM6DSV16X_GYRO_REG_FIX_V22\n"
+                  "    if (runaLsm6dxxChipId == LSM6DSV_CHIP_ID) {\n"
+                  "        busReadBuf(dev, LSM6DSV_UI_OUTX_L_G_OIS_EIS, data, 6);\n"
+                  "    } else {\n"
+                  "        busReadBuf(dev, LSM6DXX_REG_OUTX_L_G, data, 6);\n"
+                  "    }"
+              )
+
+              old2 = "busReadBuf(gyro->dev.bus, LSM6DXX_REG_OUTX_L_G, data, 6);"
+              new2 = (
+                  "// RUNA_LSM6DSV16X_GYRO_REG_FIX_V22\n"
+                  "    if (runaLsm6dxxChipId == LSM6DSV_CHIP_ID) {\n"
+                  "        busReadBuf(gyro->dev.bus, LSM6DSV_UI_OUTX_L_G_OIS_EIS, data, 6);\n"
+                  "    } else {\n"
+                  "        busReadBuf(gyro->dev.bus, LSM6DXX_REG_OUTX_L_G, data, 6);\n"
+                  "    }"
+              )
+
+              if old1 in s:
+                  s = s.replace(old1, new1)
+              elif old2 in s:
+                  s = s.replace(old2, new2)
+              else:
+                  print("WARNING: gyro register read line not found")
+
+          # v22 scale: use /16 because /32 was too slow.
+          old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
+          old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
+
+          new_scale = (
+              "// RUNA_GYRO_SCALE_FIX_0x70_V22\n"
+              "    if (lsm6dID == LSM6DSV_CHIP_ID) {\n"
+              "        gyro->scale = 1.0f / (16.4f * 16.0f); // RUNA v22 scale for 0x70\n"
+              "    } else {\n"
+              "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
+              "    }"
+          )
+
+          if "RUNA_GYRO_SCALE_FIX_0x70_V22" not in s:
+              if old_scale_1 in s:
+                  s = s.replace(old_scale_1, new_scale)
+              elif old_scale_2 in s:
+                  s = s.replace(old_scale_2, new_scale)
+              else:
+                  print("WARNING: gyro scale line not found")
+
+          p.write_text(s)
+          PY
+
+          echo "===== PATCHED LSM6DXX snippets ====="
+          grep -nE "LSM6DSV_CHIP_ID|LSM6DSV_UI_OUTX|case LSM6D|RUNA_LSM6DSV16X_GYRO_REG_FIX|RUNA_GYRO_SCALE_FIX|gyro->scale|OUTX_L_G|WHO_AM_I" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+
+          echo "===== Patch RUNA target.h ====="
+
+          # Board name
           sed -i '/TARGET_BOARD_IDENTIFIER/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/USBD_PRODUCT_STRING/d' src/main/target/RUNA_F405_WING/target.h || true
 
+          # Remove old Matek IMU
           sed -i '/MPU6000/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/ICM42605/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/ICM42688/d' src/main/target/RUNA_F405_WING/target.h || true
@@ -64,6 +156,7 @@ jobs:
           sed -i '/ICM42605_CS_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/ICM42605_SPI_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
 
+          # Remove old gyro/acc/lsm target defines
           sed -i '/USE_GYRO/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/USE_ACC/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/GYRO_/d' src/main/target/RUNA_F405_WING/target.h || true
@@ -72,12 +165,14 @@ jobs:
           sed -i '/IMU_LSM/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/LSM6/d' src/main/target/RUNA_F405_WING/target.h || true
 
+          # BARO/MAG only SPL06 + HMC5883 on I2C1
           sed -i '/USE_BARO_/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/USE_MAG_/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/USE_MAG_ALL/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/BARO_I2C_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/MAG_I2C_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
 
+          # Remove I2C2 extras
           sed -i '/USE_I2C_DEVICE_2/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/I2C2_SCL/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/I2C2_SDA/d' src/main/target/RUNA_F405_WING/target.h || true
@@ -85,9 +180,11 @@ jobs:
           sed -i '/PITOT_I2C_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/TEMPERATURE_I2C_BUS/d' src/main/target/RUNA_F405_WING/target.h || true
 
+          # PINIO
           sed -i '/PINIO1_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/PINIO2_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
 
+          # ADC
           sed -i '/ADC_INSTANCE/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/ADC1_DMA_STREAM/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/ADC_CHANNEL_1_PIN/d' src/main/target/RUNA_F405_WING/target.h || true
@@ -100,8 +197,9 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v21 diagnostic skeleton
-           * Driver not connected yet.
+           * RUNA_F405_WING v22
+           * Base: MATEKF405SE
+           * IMU: LSM6DSV16X-like 0x70 via patched LSM6DXX driver.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -125,14 +223,10 @@ jobs:
           #undef SPI1_MOSI_PIN
           #define SPI1_MOSI_PIN PA7
 
-          /*
-           * v21: оставляем строку ниже закомментированной.
-           * После лога Betaflight подключим правильный драйвер.
-           */
-          // #define USE_IMU_LSM6DSV16X
-          // #define LSM6DSV16X_CS_PIN SPI1_NSS_PIN
-          // #define LSM6DSV16X_SPI_BUS BUS_SPI1
-          // #define IMU_LSM6DSV16X_ALIGN CW0_DEG
+          #define USE_IMU_LSM6DXX
+          #define IMU_LSM6DXX_ALIGN CW0_DEG
+          #define LSM6DXX_CS_PIN SPI1_NSS_PIN
+          #define LSM6DXX_SPI_BUS BUS_SPI1
 
           #define USE_I2C
           #define USE_I2C_DEVICE_1
@@ -242,9 +336,8 @@ jobs:
           const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
           EOF
 
-          echo "===== RUNA target created. This v21 is diagnostic only. ====="
-          echo "===== Final RUNA target.h snippets ====="
-          grep -nE "RUNA|LSM6|IMU|SPI1|BARO|MAG|MAX7456|UART1|UART6|PINIO|ADC|BEEPER" src/main/target/RUNA_F405_WING/target.h || true
+          echo "===== FINAL RUNA v22 target.h snippets ====="
+          grep -nE "RUNA|TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|LSM6|IMU|BARO|MAG|MAX7456|SPI1|SPI2|SPI3|I2C1|UART1|UART6|PINIO|BEEPER|SDCARD|ADC|DMA" src/main/target/RUNA_F405_WING/target.h || true
 
       - name: Install dependencies
         run: |
@@ -258,14 +351,26 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build RUNA_F405_WING diagnostic
+      - name: Build RUNA_F405_WING
         run: |
           cd inav/build
           make RUNA_F405_WING -j$(nproc)
 
-      - name: Upload diagnostic logs only
+      - name: Find firmware
+        run: |
+          echo "Built firmware files:"
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
+
+      - name: Rename firmware
+        run: |
+          mkdir -p out
+          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v22_LSM6DSV16X_GYRO_REG_FIX.hex \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v22_LSM6DSV16X_GYRO_REG_FIX.bin \;
+          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v22_LSM6DSV16X_GYRO_REG_FIX.elf \;
+          ls -la out
+
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_v21_diagnostic_sources
-          path: |
-            inav/src/main/target/RUNA_F405_WING/*
+          name: RUNA_F405_WING_v22_LSM6DSV16X_GYRO_REG_FIX
+          path: out/*
