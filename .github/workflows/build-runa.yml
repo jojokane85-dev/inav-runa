@@ -1,4 +1,4 @@
-name: RUNA v33 INAV 8.0.1 MANUAL AXIS MAP SCALE8
+name: RUNA v34 INAV 8.0.1 AXIS MAP FIX SCALE8
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
         run: |
           cd inav
 
-          echo "===== Create RUNA_F405_WING target v33 ====="
+          echo "===== Create RUNA_F405_WING target v34 ====="
           rm -rf src/main/target/RUNA_F405_WING
           mkdir -p src/main/target/RUNA_F405_WING
 
@@ -27,7 +27,7 @@ jobs:
           target_stm32f405xg(RUNA_F405_WING)
           EOF
 
-          echo "===== Patch INAV accgyro_lsm6dxx.c for 0x70 LSM6DSV16X v33 ====="
+          echo "===== Patch INAV accgyro_lsm6dxx.c for 0x70 LSM6DSV16X v34 ====="
 
           python3 <<'PY'
           from pathlib import Path
@@ -44,7 +44,7 @@ jobs:
               insert = (
                   "#define LSM6DS3_CHIP_ID 0x69\n"
                   "\n"
-                  "/* RUNA v33: LSM6DSV16X / 0x70 support inside INAV LSM6DXX wrapper */\n"
+                  "/* RUNA v34: LSM6DSV16X / 0x70 support inside INAV LSM6DXX wrapper */\n"
                   "#define RUNA_LSM6DSV16X_CHIP_ID 0x70\n"
                   "\n"
                   "static uint8_t runaLsm6dxxChipId = 0;\n"
@@ -112,7 +112,7 @@ jobs:
           )
 
           new_init = (
-              "    // RUNA_LSM6DSV16X_INIT_V33\n"
+              "    // RUNA_LSM6DSV16X_INIT_V34\n"
               "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
               "        // ACC: 833Hz, 16G, LPF2.\n"
               "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
@@ -157,7 +157,7 @@ jobs:
               "    }\n"
           )
 
-          if "RUNA_LSM6DSV16X_INIT_V33" not in s:
+          if "RUNA_LSM6DSV16X_INIT_V34" not in s:
               if old_init in s:
                   s = s.replace(old_init, new_init)
               else:
@@ -167,20 +167,21 @@ jobs:
           # 5. Scale /8.
           # v32 /16 was too slow.
           # v30 /1 was too fast.
+          # v33 /8 was normal.
           # ------------------------------------------------------------
           old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
           old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
 
           new_scale = (
-              "// RUNA_GYRO_SCALE_V33\n"
+              "// RUNA_GYRO_SCALE_V34\n"
               "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-              "        gyro->scale = 1.0f / (16.4f * 8.0f); // RUNA v33: scale /8 for 0x70\n"
+              "        gyro->scale = 1.0f / (16.4f * 8.0f); // RUNA v34: scale /8 for 0x70\n"
               "    } else {\n"
               "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
               "    }"
           )
 
-          if "RUNA_GYRO_SCALE_V33" not in s:
+          if "RUNA_GYRO_SCALE_V34" not in s:
               if old_scale_1 in s:
                   s = s.replace(old_scale_1, new_scale)
               elif old_scale_2 in s:
@@ -189,76 +190,92 @@ jobs:
                   print("WARNING: gyro scale line not found")
 
           # ------------------------------------------------------------
-          # 6. Manual axis map in ACC read:
-          # new X = -old Y
-          # new Y =  old X
-          # new Z =  old Z
+          # 6. Manual axis map in ACC read for INAV 8.0.1 format:
+          #
+          # old:
+          # acc->ADCRaw[X] = (float) int16_val_little_endian(data, 0);
+          # acc->ADCRaw[Y] = (float) int16_val_little_endian(data, 1);
+          # acc->ADCRaw[Z] = (float) int16_val_little_endian(data, 2);
+          #
+          # new:
+          # X = -oldY
+          # Y =  oldX
+          # Z =  oldZ
           # ------------------------------------------------------------
-          if "RUNA_ACC_AXIS_MAP_V33" not in s:
-              acc_pattern = re.compile(
-                  r"(\s*)acc->ADCRaw\[X\]\s*=\s*\(int16_t\)\(data\[1\]\s*<<\s*8\s*\|\s*data\[0\]\);\s*\n"
-                  r"\s*acc->ADCRaw\[Y\]\s*=\s*\(int16_t\)\(data\[3\]\s*<<\s*8\s*\|\s*data\[2\]\);\s*\n"
-                  r"\s*acc->ADCRaw\[Z\]\s*=\s*\(int16_t\)\(data\[5\]\s*<<\s*8\s*\|\s*data\[4\]\);"
+          if "RUNA_ACC_AXIS_MAP_V34" not in s:
+              acc_old = (
+                  "    acc->ADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
+                  "    acc->ADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
+                  "    acc->ADCRaw[Z] = (float) int16_val_little_endian(data, 2);"
               )
 
-              acc_repl = (
-                  r"\1// RUNA_ACC_AXIS_MAP_V33\n"
-                  r"\1const int16_t runaAccOldX = (int16_t)(data[1] << 8 | data[0]);\n"
-                  r"\1const int16_t runaAccOldY = (int16_t)(data[3] << 8 | data[2]);\n"
-                  r"\1const int16_t runaAccOldZ = (int16_t)(data[5] << 8 | data[4]);\n"
-                  r"\1if (runaLsm6dxxChipId == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-                  r"\1    acc->ADCRaw[X] = -runaAccOldY;\n"
-                  r"\1    acc->ADCRaw[Y] =  runaAccOldX;\n"
-                  r"\1    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  r"\1} else {\n"
-                  r"\1    acc->ADCRaw[X] = runaAccOldX;\n"
-                  r"\1    acc->ADCRaw[Y] = runaAccOldY;\n"
-                  r"\1    acc->ADCRaw[Z] = runaAccOldZ;\n"
-                  r"\1}"
+              acc_new = (
+                  "    // RUNA_ACC_AXIS_MAP_V34\n"
+                  "    const float runaAccOldX = (float) int16_val_little_endian(data, 0);\n"
+                  "    const float runaAccOldY = (float) int16_val_little_endian(data, 1);\n"
+                  "    const float runaAccOldZ = (float) int16_val_little_endian(data, 2);\n"
+                  "    if (runaLsm6dxxChipId == RUNA_LSM6DSV16X_CHIP_ID) {\n"
+                  "        acc->ADCRaw[X] = -runaAccOldY;\n"
+                  "        acc->ADCRaw[Y] =  runaAccOldX;\n"
+                  "        acc->ADCRaw[Z] =  runaAccOldZ;\n"
+                  "    } else {\n"
+                  "        acc->ADCRaw[X] = runaAccOldX;\n"
+                  "        acc->ADCRaw[Y] = runaAccOldY;\n"
+                  "        acc->ADCRaw[Z] = runaAccOldZ;\n"
+                  "    }"
               )
 
-              s, n = acc_pattern.subn(acc_repl, s, count=1)
-              if n == 0:
-                  print("WARNING: ACC raw assignment block not found")
+              if acc_old in s:
+                  s = s.replace(acc_old, acc_new, 1)
+              else:
+                  print("WARNING: ACC int16_val_little_endian block not found")
 
           # ------------------------------------------------------------
-          # 7. Manual axis map in GYRO read:
-          # new X = -old Y
-          # new Y =  old X
-          # new Z =  old Z
+          # 7. Manual axis map in GYRO read for INAV 8.0.1 format:
+          #
+          # old:
+          # gyro->gyroADCRaw[X] = (float) int16_val_little_endian(data, 0);
+          # gyro->gyroADCRaw[Y] = (float) int16_val_little_endian(data, 1);
+          # gyro->gyroADCRaw[Z] = (float) int16_val_little_endian(data, 2);
+          #
+          # new:
+          # X = -oldY
+          # Y =  oldX
+          # Z =  oldZ
           # ------------------------------------------------------------
-          if "RUNA_GYRO_AXIS_MAP_V33" not in s:
-              gyro_pattern = re.compile(
-                  r"(\s*)gyro->gyroADCRaw\[X\]\s*=\s*\(int16_t\)\(data\[1\]\s*<<\s*8\s*\|\s*data\[0\]\);\s*\n"
-                  r"\s*gyro->gyroADCRaw\[Y\]\s*=\s*\(int16_t\)\(data\[3\]\s*<<\s*8\s*\|\s*data\[2\]\);\s*\n"
-                  r"\s*gyro->gyroADCRaw\[Z\]\s*=\s*\(int16_t\)\(data\[5\]\s*<<\s*8\s*\|\s*data\[4\]\);"
+          if "RUNA_GYRO_AXIS_MAP_V34" not in s:
+              gyro_old = (
+                  "    gyro->gyroADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
+                  "    gyro->gyroADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
+                  "    gyro->gyroADCRaw[Z] = (float) int16_val_little_endian(data, 2);"
               )
 
-              gyro_repl = (
-                  r"\1// RUNA_GYRO_AXIS_MAP_V33\n"
-                  r"\1const int16_t runaGyroOldX = (int16_t)(data[1] << 8 | data[0]);\n"
-                  r"\1const int16_t runaGyroOldY = (int16_t)(data[3] << 8 | data[2]);\n"
-                  r"\1const int16_t runaGyroOldZ = (int16_t)(data[5] << 8 | data[4]);\n"
-                  r"\1if (runaLsm6dxxChipId == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-                  r"\1    gyro->gyroADCRaw[X] = -runaGyroOldY;\n"
-                  r"\1    gyro->gyroADCRaw[Y] =  runaGyroOldX;\n"
-                  r"\1    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  r"\1} else {\n"
-                  r"\1    gyro->gyroADCRaw[X] = runaGyroOldX;\n"
-                  r"\1    gyro->gyroADCRaw[Y] = runaGyroOldY;\n"
-                  r"\1    gyro->gyroADCRaw[Z] = runaGyroOldZ;\n"
-                  r"\1}"
+              gyro_new = (
+                  "    // RUNA_GYRO_AXIS_MAP_V34\n"
+                  "    const float runaGyroOldX = (float) int16_val_little_endian(data, 0);\n"
+                  "    const float runaGyroOldY = (float) int16_val_little_endian(data, 1);\n"
+                  "    const float runaGyroOldZ = (float) int16_val_little_endian(data, 2);\n"
+                  "    if (runaLsm6dxxChipId == RUNA_LSM6DSV16X_CHIP_ID) {\n"
+                  "        gyro->gyroADCRaw[X] = -runaGyroOldY;\n"
+                  "        gyro->gyroADCRaw[Y] =  runaGyroOldX;\n"
+                  "        gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
+                  "    } else {\n"
+                  "        gyro->gyroADCRaw[X] = runaGyroOldX;\n"
+                  "        gyro->gyroADCRaw[Y] = runaGyroOldY;\n"
+                  "        gyro->gyroADCRaw[Z] = runaGyroOldZ;\n"
+                  "    }"
               )
 
-              s, n = gyro_pattern.subn(gyro_repl, s, count=1)
-              if n == 0:
-                  print("WARNING: GYRO raw assignment block not found")
+              if gyro_old in s:
+                  s = s.replace(gyro_old, gyro_new, 1)
+              else:
+                  print("WARNING: GYRO int16_val_little_endian block not found")
 
           p.write_text(s)
           PY
 
           echo "===== Check patched lsm6dxx snippets ====="
-          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE|RUNA_ACC_AXIS_MAP|RUNA_GYRO_AXIS_MAP|case RUNA|WHO_AM_I|gyro->scale|ADCRaw|gyroADCRaw" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE|RUNA_ACC_AXIS_MAP|RUNA_GYRO_AXIS_MAP|case RUNA|WHO_AM_I|gyro->scale|ADCRaw|gyroADCRaw|int16_val_little_endian" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
           echo "===== Patch RUNA target.h ====="
 
@@ -313,12 +330,12 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v33
+           * RUNA_F405_WING v34
            * INAV 8.0.1
            * LSM6DSV16X/0x70 through patched INAV LSM6DXX wrapper.
            * Fixes:
            * - IMU align CW0_DEG
-           * - manual axis map in driver
+           * - manual axis map in driver for INAV 8 int16_val_little_endian format
            * - gyro scale /8
            */
 
@@ -456,7 +473,7 @@ jobs:
           const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
           EOF
 
-          echo "===== Final RUNA v33 target snippets ====="
+          echo "===== Final RUNA v34 target snippets ====="
           grep -nE "RUNA|LSM6DXX|IMU|CW0|SPI1|BARO|MAG|MAX7456|UART1|UART6|ADC|BEEPER" src/main/target/RUNA_F405_WING/target.h || true
 
       - name: Configure
@@ -479,13 +496,13 @@ jobs:
       - name: Rename firmware
         run: |
           mkdir -p out
-          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v33_INAV801_MANUAL_AXIS_SCALE8.hex \;
-          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v33_INAV801_MANUAL_AXIS_SCALE8.bin \;
-          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v33_INAV801_MANUAL_AXIS_SCALE8.elf \;
+          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v34_INAV801_AXIS_MAP_FIX_SCALE8.hex \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v34_INAV801_AXIS_MAP_FIX_SCALE8.bin \;
+          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v34_INAV801_AXIS_MAP_FIX_SCALE8.elf \;
           ls -la out
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_F405_WING_v33_INAV801_MANUAL_AXIS_SCALE8
+          name: RUNA_F405_WING_v34_INAV801_AXIS_MAP_FIX_SCALE8
           path: out/*
