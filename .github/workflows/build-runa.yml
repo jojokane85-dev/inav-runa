@@ -1,4 +1,4 @@
-name: RUNA v35 INAV 8.0.1 V30 BASE SCALE4
+name: RUNA v36 INAV 8.0.1 CLEAN V30 BASE
 
 on:
   workflow_dispatch:
@@ -13,11 +13,11 @@ jobs:
         run: |
           git clone --recursive --branch 8.0.1 https://github.com/iNavFlight/inav.git inav
 
-      - name: Create RUNA target and patch LSM6DXX for LSM6DSV16X
+      - name: Create RUNA target and patch LSM6DXX for LSM6DSV16X clean base
         run: |
           cd inav
 
-          echo "===== Create RUNA_F405_WING target v35 ====="
+          echo "===== Create RUNA_F405_WING target v36 ====="
           rm -rf src/main/target/RUNA_F405_WING
           mkdir -p src/main/target/RUNA_F405_WING
 
@@ -27,7 +27,7 @@ jobs:
           target_stm32f405xg(RUNA_F405_WING)
           EOF
 
-          echo "===== Patch INAV accgyro_lsm6dxx.c for 0x70 LSM6DSV16X v35 ====="
+          echo "===== Patch INAV accgyro_lsm6dxx.c clean v30 base ====="
 
           python3 <<'PY'
           from pathlib import Path
@@ -36,17 +36,15 @@ jobs:
           s = p.read_text()
 
           # ------------------------------------------------------------
-          # 1. Add chip ID 0x70 and global saved chip id.
+          # 1. Add chip ID 0x70.
           # ------------------------------------------------------------
           if "RUNA_LSM6DSV16X_CHIP_ID" not in s:
               marker = "#define LSM6DS3_CHIP_ID 0x69"
               insert = (
                   "#define LSM6DS3_CHIP_ID 0x69\n"
                   "\n"
-                  "/* RUNA v35: LSM6DSV16X / 0x70 support inside INAV LSM6DXX wrapper */\n"
+                  "/* RUNA v36: clean LSM6DSV16X / 0x70 support inside INAV LSM6DXX wrapper */\n"
                   "#define RUNA_LSM6DSV16X_CHIP_ID 0x70\n"
-                  "\n"
-                  "static uint8_t runaLsm6dxxChipId = 0;\n"
               )
               if marker in s:
                   s = s.replace(marker, insert)
@@ -71,20 +69,10 @@ jobs:
                   print("WARNING: detect switch marker not found")
 
           # ------------------------------------------------------------
-          # 3. Save chip id after WHO_AM_I read.
-          # ------------------------------------------------------------
-          if "runaLsm6dxxChipId = tmp;" not in s:
-              if "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);" in s:
-                  s = s.replace(
-                      "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);",
-                      "busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);\n        runaLsm6dxxChipId = tmp;"
-                  )
-              else:
-                  print("WARNING: WHO_AM_I read line not found")
-
-          # ------------------------------------------------------------
-          # 4. Init for 0x70.
-          # Same idea as v30: no manual axis map, no CW90/CW270.
+          # 3. Clean v30 init for 0x70.
+          # No axis map.
+          # No scale divisor.
+          # No CW90/CW270.
           # ------------------------------------------------------------
           old_init = (
               "    // Configure the accelerometer\n"
@@ -112,27 +100,27 @@ jobs:
           )
 
           new_init = (
-              "    // RUNA_LSM6DSV16X_INIT_V35\n"
+              "    // RUNA_LSM6DSV16X_CLEAN_INIT_V36\n"
               "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-              "        // ACC: 833Hz, 16G, LPF2. Same stable path as v30.\n"
+              "        // ACC: 833Hz, 16G, LPF2. Stable v30-style path.\n"
               "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
               "\n"
-              "        // GYRO: 833Hz, 2000dps. Avoid old 6664Hz path for 0x70.\n"
+              "        // GYRO: 833Hz, 2000dps. Avoid 6664Hz for 0x70.\n"
               "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
               "\n"
-              "        // CTRL3: enable auto increment, 4-wire SPI.\n"
+              "        // CTRL3: auto-increment only.\n"
               "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, LSM6DXX_VAL_CTRL3_C_IF_INC, 1);\n"
               "\n"
               "        // CTRL4: disable I2C, enable gyro LPF1.\n"
               "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
               "\n"
-              "        // CTRL6: use full mask for 0x70.\n"
+              "        // CTRL6: full mask for 0x70.\n"
               "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, LSM6DXX_MASK_CTRL6_C, (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
               "\n"
-              "        // CTRL7: no HPF for diagnostic stability.\n"
+              "        // CTRL7: no HPF.\n"
               "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, 0, 1);\n"
               "\n"
-              "        // CTRL9: disable I3C if register exists on this chip.\n"
+              "        // CTRL9: disable I3C if present.\n"
               "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL9_XL, LSM6DXX_MASK_CTRL9_XL, LSM6DXX_VAL_CTRL9_XL_I3C_DISABLE, 1);\n"
               "    } else {\n"
               "        // Configure the accelerometer\n"
@@ -157,31 +145,29 @@ jobs:
               "    }\n"
           )
 
-          if "RUNA_LSM6DSV16X_INIT_V35" not in s:
+          if "RUNA_LSM6DSV16X_CLEAN_INIT_V36" not in s:
               if old_init in s:
                   s = s.replace(old_init, new_init)
               else:
                   print("WARNING: exact init block not found")
 
           # ------------------------------------------------------------
-          # 5. Scale /4.
-          # v30 /1 = too fast.
-          # v33/v34 /8 = normal/slower but user says became slow.
-          # v35 /4 = middle between /1 and /8.
+          # 4. Keep native 2000dps scale.
+          # No /4, /8, /16 here.
           # ------------------------------------------------------------
           old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
           old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
 
           new_scale = (
-              "// RUNA_GYRO_SCALE_V35\n"
+              "// RUNA_GYRO_SCALE_V36_NATIVE\n"
               "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-              "        gyro->scale = 1.0f / (16.4f * 4.0f); // RUNA v35: scale /4 for 0x70\n"
+              "        gyro->scale = 1.0f / 16.4f; // RUNA v36: native scale, clean baseline\n"
               "    } else {\n"
               "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
               "    }"
           )
 
-          if "RUNA_GYRO_SCALE_V35" not in s:
+          if "RUNA_GYRO_SCALE_V36_NATIVE" not in s:
               if old_scale_1 in s:
                   s = s.replace(old_scale_1, new_scale)
               elif old_scale_2 in s:
@@ -193,7 +179,7 @@ jobs:
           PY
 
           echo "===== Check patched lsm6dxx snippets ====="
-          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE|case RUNA|WHO_AM_I|CTRL1_XL|CTRL2_G|CTRL3_C|CTRL4_C|CTRL6_C|CTRL7_G|CTRL9_XL|gyro->scale|ADCRaw|gyroADCRaw" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE|case RUNA|WHO_AM_I|CTRL1_XL|CTRL2_G|CTRL3_C|CTRL4_C|CTRL6_C|CTRL7_G|CTRL9_XL|gyro->scale" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
           echo "===== Patch RUNA target.h ====="
 
@@ -248,12 +234,12 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v35
+           * RUNA_F405_WING v36
            * INAV 8.0.1
-           * Based on v30 stable behavior.
+           * Clean v30-style baseline.
            * No manual axis map.
            * No CW90/CW270.
-           * Scale /4.
+           * No scale divisor.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -320,7 +306,7 @@ jobs:
           #define SPI3_SCK_PIN PB3
 
           #undef SPI3_MISO_PIN
-          #define SPI3_MISO_PIN PB4
+          #define SPI3_MOSI_PIN PB4
 
           #undef SPI3_MOSI_PIN
           #define SPI3_MOSI_PIN PB5
@@ -390,7 +376,7 @@ jobs:
           const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
           EOF
 
-          echo "===== Final RUNA v35 target snippets ====="
+          echo "===== Final RUNA v36 target snippets ====="
           grep -nE "RUNA|LSM6DXX|IMU|CW0|SPI1|BARO|MAG|MAX7456|UART1|UART6|ADC|BEEPER" src/main/target/RUNA_F405_WING/target.h || true
 
       - name: Configure
@@ -413,13 +399,13 @@ jobs:
       - name: Rename firmware
         run: |
           mkdir -p out
-          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v35_INAV801_V30_BASE_SCALE4.hex \;
-          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v35_INAV801_V30_BASE_SCALE4.bin \;
-          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v35_INAV801_V30_BASE_SCALE4.elf \;
+          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE.hex \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE.bin \;
+          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE.elf \;
           ls -la out
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_F405_WING_v35_INAV801_V30_BASE_SCALE4
+          name: RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE
           path: out/*
