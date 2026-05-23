@@ -1,4 +1,4 @@
-name: RUNA v36 INAV 8.0.1 CLEAN V30 BASE
+name: RUNA v36 INAV 8.0.1 CLEAN V30 BASE FIXED
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
         run: |
           cd inav
 
-          echo "===== Create RUNA_F405_WING target v36 ====="
+          echo "===== Create RUNA_F405_WING target v36 fixed ====="
           rm -rf src/main/target/RUNA_F405_WING
           mkdir -p src/main/target/RUNA_F405_WING
 
@@ -35,15 +35,13 @@ jobs:
           p = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
           s = p.read_text()
 
-          # ------------------------------------------------------------
           # 1. Add chip ID 0x70.
-          # ------------------------------------------------------------
           if "RUNA_LSM6DSV16X_CHIP_ID" not in s:
               marker = "#define LSM6DS3_CHIP_ID 0x69"
               insert = (
                   "#define LSM6DS3_CHIP_ID 0x69\n"
                   "\n"
-                  "/* RUNA v36: clean LSM6DSV16X / 0x70 support inside INAV LSM6DXX wrapper */\n"
+                  "/* RUNA v36 fixed: clean LSM6DSV16X / 0x70 support inside INAV LSM6DXX wrapper */\n"
                   "#define RUNA_LSM6DSV16X_CHIP_ID 0x70\n"
               )
               if marker in s:
@@ -51,9 +49,7 @@ jobs:
               else:
                   print("WARNING: LSM6DS3_CHIP_ID marker not found")
 
-          # ------------------------------------------------------------
           # 2. Accept 0x70 in detect switch.
-          # ------------------------------------------------------------
           if "case RUNA_LSM6DSV16X_CHIP_ID:" not in s:
               if "case LSM6DSL_CHIP_ID:" in s:
                   s = s.replace(
@@ -68,12 +64,7 @@ jobs:
               else:
                   print("WARNING: detect switch marker not found")
 
-          # ------------------------------------------------------------
           # 3. Clean v30 init for 0x70.
-          # No axis map.
-          # No scale divisor.
-          # No CW90/CW270.
-          # ------------------------------------------------------------
           old_init = (
               "    // Configure the accelerometer\n"
               "    // 833hz ODR, 16G scale, use LPF2 output (default with ODR/4 cutoff)\n"
@@ -100,7 +91,7 @@ jobs:
           )
 
           new_init = (
-              "    // RUNA_LSM6DSV16X_CLEAN_INIT_V36\n"
+              "    // RUNA_LSM6DSV16X_CLEAN_INIT_V36_FIXED\n"
               "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
               "        // ACC: 833Hz, 16G, LPF2. Stable v30-style path.\n"
               "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
@@ -145,29 +136,26 @@ jobs:
               "    }\n"
           )
 
-          if "RUNA_LSM6DSV16X_CLEAN_INIT_V36" not in s:
+          if "RUNA_LSM6DSV16X_CLEAN_INIT_V36_FIXED" not in s:
               if old_init in s:
                   s = s.replace(old_init, new_init)
               else:
                   print("WARNING: exact init block not found")
 
-          # ------------------------------------------------------------
           # 4. Keep native 2000dps scale.
-          # No /4, /8, /16 here.
-          # ------------------------------------------------------------
           old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
           old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
 
           new_scale = (
-              "// RUNA_GYRO_SCALE_V36_NATIVE\n"
+              "// RUNA_GYRO_SCALE_V36_NATIVE_FIXED\n"
               "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-              "        gyro->scale = 1.0f / 16.4f; // RUNA v36: native scale, clean baseline\n"
+              "        gyro->scale = 1.0f / 16.4f; // RUNA v36 fixed: native scale, clean baseline\n"
               "    } else {\n"
               "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
               "    }"
           )
 
-          if "RUNA_GYRO_SCALE_V36_NATIVE" not in s:
+          if "RUNA_GYRO_SCALE_V36_NATIVE_FIXED" not in s:
               if old_scale_1 in s:
                   s = s.replace(old_scale_1, new_scale)
               elif old_scale_2 in s:
@@ -234,12 +222,13 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v36
+           * RUNA_F405_WING v36 fixed
            * INAV 8.0.1
            * Clean v30-style baseline.
            * No manual axis map.
            * No CW90/CW270.
            * No scale divisor.
+           * SPI3 typo fixed.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -306,7 +295,7 @@ jobs:
           #define SPI3_SCK_PIN PB3
 
           #undef SPI3_MISO_PIN
-          #define SPI3_MOSI_PIN PB4
+          #define SPI3_MISO_PIN PB4
 
           #undef SPI3_MOSI_PIN
           #define SPI3_MOSI_PIN PB5
@@ -376,8 +365,8 @@ jobs:
           const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
           EOF
 
-          echo "===== Final RUNA v36 target snippets ====="
-          grep -nE "RUNA|LSM6DXX|IMU|CW0|SPI1|BARO|MAG|MAX7456|UART1|UART6|ADC|BEEPER" src/main/target/RUNA_F405_WING/target.h || true
+          echo "===== Final RUNA v36 fixed target snippets ====="
+          grep -nE "RUNA|LSM6DXX|IMU|CW0|SPI1|SPI2|SPI3|BARO|MAG|MAX7456|UART1|UART6|ADC|BEEPER" src/main/target/RUNA_F405_WING/target.h || true
 
       - name: Configure
         run: |
@@ -399,13 +388,13 @@ jobs:
       - name: Rename firmware
         run: |
           mkdir -p out
-          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE.hex \;
-          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE.bin \;
-          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE.elf \;
+          find inav/build -type f -name "*.hex" -exec cp {} out/RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE_FIXED.hex \;
+          find inav/build -type f -name "*.bin" -exec cp {} out/RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE_FIXED.bin \;
+          find inav/build -type f -name "*.elf" -exec cp {} out/RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE_FIXED.elf \;
           ls -la out
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE
+          name: RUNA_F405_WING_v36_INAV801_CLEAN_V30_BASE_FIXED
           path: out/*
