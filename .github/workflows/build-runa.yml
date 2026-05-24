@@ -1,4 +1,4 @@
-name: RUNA v40 LITE FIX2 INAV 8.0.1 SPEEDYBEE BASE
+name: RUNA v40 LITE FIX3 INAV 8.0.1 SPEEDYBEE BASE
 
 on:
   workflow_dispatch:
@@ -80,7 +80,7 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v40 LITE FIX2
+           * RUNA_F405_WING v40 LITE FIX3
            * Base: SpeedyBee F405 Wing
            * INAV 8.0.1
            *
@@ -95,6 +95,7 @@ jobs:
            * - MAG
            * - GPS
            * - GEOZONE
+           * - WIND ESTIMATOR
            * - VTX
            * - LED STRIP
            * - PINIO
@@ -161,7 +162,7 @@ jobs:
           #undef MAG_SPI_BUS
           #undef MAG_CS_PIN
 
-          /* ---------- GPS / GEOZONE / NAV EXTRAS ---------- */
+          /* ---------- GPS / GEOZONE / WIND / NAV EXTRAS ---------- */
 
           #undef USE_GPS
           #undef USE_GPS_PROTO_UBLOX
@@ -174,6 +175,7 @@ jobs:
           #undef USE_FW_AUTOLAND
           #undef USE_NAV_FW_LAUNCH
           #undef USE_NAV_FW_AUTOLAND
+          #undef USE_WIND_ESTIMATOR
 
           /* ---------- VTX ---------- */
 
@@ -235,9 +237,9 @@ jobs:
 
           EOF
 
-          echo "===== RUNA LITE FIX2 target created from $BASE_TARGET ====="
+          echo "===== RUNA LITE FIX3 target created from $BASE_TARGET ====="
           echo "===== important target.h lines ====="
-          grep -nE "TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|ICM|42688|42605|GYRO|ACC|IMU|BARO|MAG|MAX7456|AT7456|SDCARD|BLACKBOX|VTX|GPS|GEOZONE|PITOT|LED|PINIO|SOFTSERIAL|UART|SPI|I2C" src/main/target/RUNA_F405_WING/target.h || true
+          grep -nE "TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|ICM|42688|42605|GYRO|ACC|IMU|BARO|MAG|MAX7456|AT7456|SDCARD|BLACKBOX|VTX|GPS|GEOZONE|WIND|PITOT|LED|PINIO|SOFTSERIAL|UART|SPI|I2C" src/main/target/RUNA_F405_WING/target.h || true
 
           echo "===== target folder ====="
           ls -la src/main/target/RUNA_F405_WING
@@ -250,7 +252,7 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build RUNA_F405_WING LITE FIX2
+      - name: Build RUNA_F405_WING LITE FIX3
         run: |
           cd inav/build
           make RUNA_F405_WING -j$(nproc)
@@ -276,10 +278,10 @@ jobs:
 
           echo "Found ELF: $ELF"
 
-          cp "$ELF" out/RUNA_F405_WING_v40_LITE_FIX2_SPEEDYBEE_BASE.elf
+          cp "$ELF" out/RUNA_F405_WING_v40_LITE_FIX3_SPEEDYBEE_BASE.elf
 
-          arm-none-eabi-objcopy -O ihex "$ELF" out/RUNA_F405_WING_v40_LITE_FIX2_SPEEDYBEE_BASE.hex
-          arm-none-eabi-objcopy -O binary "$ELF" out/RUNA_F405_WING_v40_LITE_FIX2_SPEEDYBEE_BASE.bin
+          arm-none-eabi-objcopy -O ihex "$ELF" out/RUNA_F405_WING_v40_LITE_FIX3_SPEEDYBEE_BASE.hex
+          arm-none-eabi-objcopy -O binary "$ELF" out/RUNA_F405_WING_v40_LITE_FIX3_SPEEDYBEE_BASE.bin
 
           echo "===== SIZE ====="
           ls -lh out
@@ -287,5 +289,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_F405_WING_v40_LITE_FIX2_SPEEDYBEE_BASE
+          name: RUNA_F405_WING_v40_LITE_FIX3_SPEEDYBEE_BASE
           path: out/*
