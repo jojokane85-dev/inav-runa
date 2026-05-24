@@ -1,4 +1,4 @@
-name: RUNA v39 INAV 8.0.1 AXIS MAP TEST PACK HEX FIX 2
+name: RUNA v40 INAV 8.0.1 SPEEDYBEE BASE
 
 on:
   workflow_dispatch:
@@ -13,503 +13,140 @@ jobs:
         run: |
           git clone --recursive --branch 8.0.1 https://github.com/iNavFlight/inav.git inav
 
-      - name: Install ARM objcopy
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils-arm-none-eabi
-          which arm-none-eabi-objcopy
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            git \
+            gcc-arm-none-eabi \
+            binutils-arm-none-eabi
 
-      - name: Patch LSM6DXX for RUNA LSM6DSV16X 0x70 axis map pack
+          which arm-none-eabi-objcopy || true
+
+      - name: Find SpeedyBee target
         run: |
           cd inav
 
-          python3 <<'PY'
-          from pathlib import Path
+          echo "===== TARGETS WITH SPEEDY ====="
+          find src/main/target -maxdepth 1 -type d | grep -i speedy || true
 
-          p = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
-          s = p.read_text()
+          echo "===== MAKE HELP SPEEDY ====="
+          mkdir -p build
+          cd build
+          cmake ..
+          make help | grep -i speedy || true
 
-          if "RUNA_LSM6DSV16X_CHIP_ID" not in s:
-              marker = "#define LSM6DS3_CHIP_ID 0x69"
-              insert = (
-                  "#define LSM6DS3_CHIP_ID 0x69\n"
-                  "\n"
-                  "/* RUNA v39: LSM6DSV16X / 0x70 support + axis map test pack */\n"
-                  "#define RUNA_LSM6DSV16X_CHIP_ID 0x70\n"
-              )
-              if marker in s:
-                  s = s.replace(marker, insert)
-              else:
-                  print("WARNING: LSM6DS3_CHIP_ID marker not found")
-
-          if "case RUNA_LSM6DSV16X_CHIP_ID:" not in s:
-              if "case LSM6DSL_CHIP_ID:" in s:
-                  s = s.replace(
-                      "case LSM6DSL_CHIP_ID:",
-                      "case LSM6DSL_CHIP_ID:\n            case RUNA_LSM6DSV16X_CHIP_ID:"
-                  )
-              elif "case LSM6DSO_CHIP_ID:" in s:
-                  s = s.replace(
-                      "case LSM6DSO_CHIP_ID:",
-                      "case LSM6DSO_CHIP_ID:\n            case RUNA_LSM6DSV16X_CHIP_ID:"
-                  )
-              else:
-                  print("WARNING: detect switch marker not found")
-
-          old_init = (
-              "    // Configure the accelerometer\n"
-              "    // 833hz ODR, 16G scale, use LPF2 output (default with ODR/4 cutoff)\n"
-              "    lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
-              "\n"
-              "    // Configure the gyro\n"
-              "    // 6664hz ODR, 2000dps scale\n"
-              "    lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (LSM6DXX_VAL_CTRL2_G_ODR6664 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
-              "\n"
-              "    // Configure control register 3\n"
-              "    // latch LSB/MSB during reads; set interrupt pins active high; set interrupt pins push/pull; set 4-wire SPI; enable auto-increment burst reads\n"
-              "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, (LSM6DXX_VAL_CTRL3_C_H_LACTIVE | LSM6DXX_VAL_CTRL3_C_PP_OD | LSM6DXX_VAL_CTRL3_C_SIM | LSM6DXX_VAL_CTRL3_C_IF_INC), 1);\n"
-              "\n"
-              "    // Configure control register 4\n"
-              "    // enable accelerometer high performane mode; enable gyro LPF1\n"
-              "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_DRDY_MASK | LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
-              "\n"
-              "    // Configure control register 6\n"
-              "    // disable I2C interface; set gyro LPF1 cutoff according to gyro_hardware_lpf setting\n"
-              "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, (lsm6dID == LSM6DSO_CHIP_ID? LSM6DXX_MASK_CTRL6_C:LSM6DSL_MASK_CTRL6_C), (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
-              "\n"
-              "    // Configure control register 7\n"
-              "    lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, (LSM6DXX_VAL_CTRL7_G_HP_EN_G | LSM6DXX_VAL_CTRL7_G_HPM_G_16), 1);\n"
-          )
-
-          new_init = (
-              "    // RUNA_LSM6DSV16X_INIT_V39\n"
-              "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-              "        // ACC: 833Hz, 16G, LPF2.\n"
-              "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
-              "\n"
-              "        // GYRO: 833Hz, 2000dps. Avoid old 6664Hz mode for 0x70.\n"
-              "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
-              "\n"
-              "        // Auto-increment SPI reads.\n"
-              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, LSM6DXX_VAL_CTRL3_C_IF_INC, 1);\n"
-              "\n"
-              "        // Disable I2C, enable gyro LPF1.\n"
-              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
-              "\n"
-              "        // Full mask for 0x70.\n"
-              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, LSM6DXX_MASK_CTRL6_C, (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
-              "\n"
-              "        // No HPF.\n"
-              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, 0, 1);\n"
-              "\n"
-              "        // Disable I3C if present.\n"
-              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL9_XL, LSM6DXX_MASK_CTRL9_XL, LSM6DXX_VAL_CTRL9_XL_I3C_DISABLE, 1);\n"
-              "    } else {\n"
-              "        // Configure the accelerometer\n"
-              "        // 833hz ODR, 16G scale, use LPF2 output (default with ODR/4 cutoff)\n"
-              "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL1_XL, (LSM6DXX_VAL_CTRL1_XL_ODR833 << 4) | (LSM6DXX_VAL_CTRL1_XL_16G << 2) | (LSM6DXX_VAL_CTRL1_XL_LPF2 << 1), 1);\n"
-              "\n"
-              "        // Configure the gyro\n"
-              "        // 6664hz ODR, 2000dps scale\n"
-              "        lsm6dxxWriteRegister(dev, LSM6DXX_REG_CTRL2_G, (LSM6DXX_VAL_CTRL2_G_ODR6664 << 4) | (LSM6DXX_VAL_CTRL2_G_2000DPS << 2), 1);\n"
-              "\n"
-              "        // Configure control register 3\n"
-              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL3_C, LSM6DXX_MASK_CTRL3_C, (LSM6DXX_VAL_CTRL3_C_H_LACTIVE | LSM6DXX_VAL_CTRL3_C_PP_OD | LSM6DXX_VAL_CTRL3_C_SIM | LSM6DXX_VAL_CTRL3_C_IF_INC), 1);\n"
-              "\n"
-              "        // Configure control register 4\n"
-              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL4_C, LSM6DXX_MASK_CTRL4_C, (LSM6DXX_VAL_CTRL4_C_DRDY_MASK | LSM6DXX_VAL_CTRL4_C_I2C_DISABLE | LSM6DXX_VAL_CTRL4_C_LPF1_SEL_G), 1);\n"
-              "\n"
-              "        // Configure control register 6\n"
-              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL6_C, (lsm6dID == LSM6DSO_CHIP_ID? LSM6DXX_MASK_CTRL6_C:LSM6DSL_MASK_CTRL6_C), (LSM6DXX_VAL_CTRL6_C_XL_HM_MODE | getLsmDlpfBandwidth(gyro)), 1);\n"
-              "\n"
-              "        // Configure control register 7\n"
-              "        lsm6dxxWriteRegisterBits(dev, LSM6DXX_REG_CTRL7_G, LSM6DXX_MASK_CTRL7_G, (LSM6DXX_VAL_CTRL7_G_HP_EN_G | LSM6DXX_VAL_CTRL7_G_HPM_G_16), 1);\n"
-              "    }\n"
-          )
-
-          if "RUNA_LSM6DSV16X_INIT_V39" not in s:
-              if old_init in s:
-                  s = s.replace(old_init, new_init)
-              else:
-                  print("WARNING: init block not found")
-
-          old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
-          old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
-
-          new_scale = (
-              "// RUNA_GYRO_SCALE_V39_SCALE8\n"
-              "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-              "        gyro->scale = 1.0f / (16.4f * 8.0f); // RUNA v39: scale /8\n"
-              "    } else {\n"
-              "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
-              "    }"
-          )
-
-          if "RUNA_GYRO_SCALE_V39_SCALE8" not in s:
-              if old_scale_1 in s:
-                  s = s.replace(old_scale_1, new_scale)
-              elif old_scale_2 in s:
-                  s = s.replace(old_scale_2, new_scale)
-              else:
-                  print("WARNING: gyro scale line not found")
-
-          if "RUNA_ACC_AXIS_MAP_V39" not in s:
-              acc_old = (
-                  "    acc->ADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
-                  "    acc->ADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
-                  "    acc->ADCRaw[Z] = (float) int16_val_little_endian(data, 2);"
-              )
-
-              acc_new = (
-                  "    // RUNA_ACC_AXIS_MAP_V39\n"
-                  "    const float runaAccOldX = (float) int16_val_little_endian(data, 0);\n"
-                  "    const float runaAccOldY = (float) int16_val_little_endian(data, 1);\n"
-                  "    const float runaAccOldZ = (float) int16_val_little_endian(data, 2);\n"
-                  "\n"
-                  "#if defined(RUNA_AXIS_MAP_A)\n"
-                  "    acc->ADCRaw[X] = -runaAccOldY;\n"
-                  "    acc->ADCRaw[Y] =  runaAccOldX;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_B)\n"
-                  "    acc->ADCRaw[X] =  runaAccOldY;\n"
-                  "    acc->ADCRaw[Y] = -runaAccOldX;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_C)\n"
-                  "    acc->ADCRaw[X] =  runaAccOldY;\n"
-                  "    acc->ADCRaw[Y] =  runaAccOldX;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_D)\n"
-                  "    acc->ADCRaw[X] = -runaAccOldY;\n"
-                  "    acc->ADCRaw[Y] = -runaAccOldX;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#else\n"
-                  "    acc->ADCRaw[X] = runaAccOldX;\n"
-                  "    acc->ADCRaw[Y] = runaAccOldY;\n"
-                  "    acc->ADCRaw[Z] = runaAccOldZ;\n"
-                  "#endif"
-              )
-
-              if acc_old in s:
-                  s = s.replace(acc_old, acc_new, 1)
-              else:
-                  print("WARNING: ACC int16_val_little_endian block not found")
-
-          if "RUNA_GYRO_AXIS_MAP_V39" not in s:
-              gyro_old = (
-                  "    gyro->gyroADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
-                  "    gyro->gyroADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
-                  "    gyro->gyroADCRaw[Z] = (float) int16_val_little_endian(data, 2);"
-              )
-
-              gyro_new = (
-                  "    // RUNA_GYRO_AXIS_MAP_V39\n"
-                  "    const float runaGyroOldX = (float) int16_val_little_endian(data, 0);\n"
-                  "    const float runaGyroOldY = (float) int16_val_little_endian(data, 1);\n"
-                  "    const float runaGyroOldZ = (float) int16_val_little_endian(data, 2);\n"
-                  "\n"
-                  "#if defined(RUNA_AXIS_MAP_A)\n"
-                  "    gyro->gyroADCRaw[X] = -runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Y] =  runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_B)\n"
-                  "    gyro->gyroADCRaw[X] =  runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Y] = -runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_C)\n"
-                  "    gyro->gyroADCRaw[X] =  runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Y] =  runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_D)\n"
-                  "    gyro->gyroADCRaw[X] = -runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Y] = -runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#else\n"
-                  "    gyro->gyroADCRaw[X] = runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Y] = runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Z] = runaGyroOldZ;\n"
-                  "#endif"
-              )
-
-              if gyro_old in s:
-                  s = s.replace(gyro_old, gyro_new, 1)
-              else:
-                  print("WARNING: GYRO int16_val_little_endian block not found")
-
-          p.write_text(s)
-          PY
-
-          echo "===== Check patched lsm6dxx snippets ====="
-          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE|RUNA_ACC_AXIS_MAP|RUNA_GYRO_AXIS_MAP|RUNA_AXIS_MAP|gyro->scale|ADCRaw|gyroADCRaw" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
-
-      - name: Create RUNA map targets
+      - name: Create RUNA target from SPEEDYBEEF405WING
         run: |
           cd inav
 
-          create_target () {
-            T="$1"
-            MAP_DEFINE="$2"
+          BASE_TARGET=""
 
-            echo "===== Create target $T with $MAP_DEFINE ====="
+          if [ -d "src/main/target/SPEEDYBEEF405WING" ]; then
+            BASE_TARGET="SPEEDYBEEF405WING"
+          elif [ -d "src/main/target/SPEEDYBEEF405WING_V2" ]; then
+            BASE_TARGET="SPEEDYBEEF405WING_V2"
+          elif [ -d "src/main/target/SPEEDYBEEF405WINGAPP" ]; then
+            BASE_TARGET="SPEEDYBEEF405WINGAPP"
+          elif [ -d "src/main/target/SPEEDYBEEF405WINGMINI" ]; then
+            BASE_TARGET="SPEEDYBEEF405WINGMINI"
+          fi
 
-            rm -rf "src/main/target/$T"
-            mkdir -p "src/main/target/$T"
-            cp -r src/main/target/MATEKF405SE/* "src/main/target/$T/"
+          if [ -z "$BASE_TARGET" ]; then
+            echo "ERROR: SpeedyBee F405 Wing target not found in INAV 8.0.1"
+            echo "Available SpeedyBee targets:"
+            find src/main/target -maxdepth 1 -type d | grep -i speedy || true
+            exit 1
+          fi
 
-            cat > "src/main/target/$T/CMakeLists.txt" <<EOF
-          target_stm32f405xg($T)
+          echo "===== USING BASE TARGET: $BASE_TARGET ====="
+
+          rm -rf src/main/target/RUNA_F405_WING
+          mkdir -p src/main/target/RUNA_F405_WING
+
+          cp -r "src/main/target/$BASE_TARGET/"* src/main/target/RUNA_F405_WING/
+
+          cat > src/main/target/RUNA_F405_WING/CMakeLists.txt <<'EOF'
+          target_stm32f405xg(RUNA_F405_WING)
           EOF
 
-            sed -i '/TARGET_BOARD_IDENTIFIER/d' "src/main/target/$T/target.h" || true
-            sed -i '/USBD_PRODUCT_STRING/d' "src/main/target/$T/target.h" || true
+          echo "===== Patch RUNA name only ====="
 
-            sed -i '/MPU6000/d' "src/main/target/$T/target.h" || true
-            sed -i '/ICM42605/d' "src/main/target/$T/target.h" || true
-            sed -i '/ICM42688/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_IMU_MPU/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_IMU_ICM/d' "src/main/target/$T/target.h" || true
-            sed -i '/IMU_MPU/d' "src/main/target/$T/target.h" || true
-            sed -i '/IMU_ICM/d' "src/main/target/$T/target.h" || true
-            sed -i '/MPU6000_CS_PIN/d' "src/main/target/$T/target.h" || true
-            sed -i '/MPU6000_SPI_BUS/d' "src/main/target/$T/target.h" || true
-            sed -i '/ICM42605_CS_PIN/d' "src/main/target/$T/target.h" || true
-            sed -i '/ICM42605_SPI_BUS/d' "src/main/target/$T/target.h" || true
+          sed -i '/TARGET_BOARD_IDENTIFIER/d' src/main/target/RUNA_F405_WING/target.h || true
+          sed -i '/USBD_PRODUCT_STRING/d' src/main/target/RUNA_F405_WING/target.h || true
 
-            sed -i '/USE_GYRO/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_ACC/d' "src/main/target/$T/target.h" || true
-            sed -i '/GYRO_/d' "src/main/target/$T/target.h" || true
-            sed -i '/ACC_/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_IMU_LSM/d' "src/main/target/$T/target.h" || true
-            sed -i '/IMU_LSM/d' "src/main/target/$T/target.h" || true
-            sed -i '/LSM6/d' "src/main/target/$T/target.h" || true
-
-            sed -i '/USE_BARO_/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_MAG_/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_MAG_ALL/d' "src/main/target/$T/target.h" || true
-            sed -i '/BARO_I2C_BUS/d' "src/main/target/$T/target.h" || true
-            sed -i '/MAG_I2C_BUS/d' "src/main/target/$T/target.h" || true
-
-            sed -i '/USE_I2C_DEVICE_2/d' "src/main/target/$T/target.h" || true
-            sed -i '/I2C2_SCL/d' "src/main/target/$T/target.h" || true
-            sed -i '/I2C2_SDA/d' "src/main/target/$T/target.h" || true
-            sed -i '/RANGEFINDER_I2C_BUS/d' "src/main/target/$T/target.h" || true
-            sed -i '/PITOT_I2C_BUS/d' "src/main/target/$T/target.h" || true
-            sed -i '/TEMPERATURE_I2C_BUS/d' "src/main/target/$T/target.h" || true
-
-            sed -i '/PINIO1_PIN/d' "src/main/target/$T/target.h" || true
-            sed -i '/PINIO2_PIN/d' "src/main/target/$T/target.h" || true
-
-            sed -i '/ADC_INSTANCE/d' "src/main/target/$T/target.h" || true
-            sed -i '/ADC1_DMA_STREAM/d' "src/main/target/$T/target.h" || true
-            sed -i '/ADC_CHANNEL_1_PIN/d' "src/main/target/$T/target.h" || true
-            sed -i '/ADC_CHANNEL_2_PIN/d' "src/main/target/$T/target.h" || true
-            sed -i '/ADC_CHANNEL_3_PIN/d' "src/main/target/$T/target.h" || true
-            sed -i '/VBAT_ADC_CHANNEL/d' "src/main/target/$T/target.h" || true
-            sed -i '/CURRENT_METER_ADC_CHANNEL/d' "src/main/target/$T/target.h" || true
-            sed -i '/RSSI_ADC_CHANNEL/d' "src/main/target/$T/target.h" || true
-
-            cat >> "src/main/target/$T/target.h" <<EOF
+          cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * $T
-           * RUNA v39 axis map test pack
+           * RUNA_F405_WING v40
+           * Base: SPEEDYBEEF405WING
            * INAV 8.0.1
-           * Scale /8
-           * $MAP_DEFINE
+           * No LSM6DXX patch.
+           * No manual axis map.
+           * No gyro scale hack.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
           #define TARGET_BOARD_IDENTIFIER "RUNA"
 
           #undef USBD_PRODUCT_STRING
-          #define USBD_PRODUCT_STRING "$T"
-
-          #define $MAP_DEFINE
-
-          #define USE_SPI
-          #define USE_SPI_DEVICE_1
-
-          #undef SPI1_NSS_PIN
-          #define SPI1_NSS_PIN PA4
-
-          #undef SPI1_SCK_PIN
-          #define SPI1_SCK_PIN PA5
-
-          #undef SPI1_MISO_PIN
-          #define SPI1_MISO_PIN PA6
-
-          #undef SPI1_MOSI_PIN
-          #define SPI1_MOSI_PIN PA7
-
-          #define USE_IMU_LSM6DXX
-          #define IMU_LSM6DXX_ALIGN CW0_DEG
-          #define LSM6DXX_CS_PIN SPI1_NSS_PIN
-          #define LSM6DXX_SPI_BUS BUS_SPI1
-
-          #define USE_I2C
-          #define USE_I2C_DEVICE_1
-
-          #undef I2C1_SCL
-          #define I2C1_SCL PB8
-
-          #undef I2C1_SDA
-          #define I2C1_SDA PB9
-
-          #define USE_BARO
-          #define BARO_I2C_BUS BUS_I2C1
-          #define USE_BARO_SPL06
-
-          #define USE_MAG
-          #define MAG_I2C_BUS BUS_I2C1
-          #define USE_MAG_HMC5883
-
-          #define USE_SPI_DEVICE_2
-
-          #undef SPI2_SCK_PIN
-          #define SPI2_SCK_PIN PB13
-
-          #undef SPI2_MISO_PIN
-          #define SPI2_MISO_PIN PC2
-
-          #undef SPI2_MOSI_PIN
-          #define SPI2_MOSI_PIN PC3
-
-          #define USE_MAX7456
-          #define MAX7456_CS_PIN PB12
-          #define MAX7456_SPI_BUS BUS_SPI2
-
-          #define USE_SPI_DEVICE_3
-
-          #undef SPI3_SCK_PIN
-          #define SPI3_SCK_PIN PB3
-
-          #undef SPI3_MISO_PIN
-          #define SPI3_MISO_PIN PB4
-
-          #undef SPI3_MOSI_PIN
-          #define SPI3_MOSI_PIN PB5
-
-          #define USE_SDCARD
-          #define USE_SDCARD_SPI
-          #define SDCARD_SPI_BUS BUS_SPI3
-          #define SDCARD_CS_PIN PC14
-
-          #define USE_UART1
-          #define UART1_TX_PIN PA9
-          #define UART1_RX_PIN PA10
-
-          #define USE_UART6
-          #define UART6_TX_PIN PC6
-          #define UART6_RX_PIN PC7
-
-          #define USE_ADC
-          #define ADC_INSTANCE ADC1
-          #define ADC1_DMA_STREAM DMA2_Stream0
-
-          #undef ADC_CHANNEL_1_PIN
-          #define ADC_CHANNEL_1_PIN PC0
-
-          #undef ADC_CHANNEL_2_PIN
-          #define ADC_CHANNEL_2_PIN PC1
-
-          #undef VBAT_ADC_CHANNEL
-          #define VBAT_ADC_CHANNEL ADC_CHN_1
-
-          #undef CURRENT_METER_ADC_CHANNEL
-          #define CURRENT_METER_ADC_CHANNEL ADC_CHN_2
-
-          #undef BEEPER
-          #define BEEPER PC15
-          #define BEEPER_INVERTED
-
-          #define USE_PINIO
-          #define USE_PINIOBOX
-
-          #undef PINIO1_PIN
-          #define PINIO1_PIN PC13
+          #define USBD_PRODUCT_STRING "RUNA_F405_WING"
 
           EOF
 
-            cat > "src/main/target/$T/target.c" <<'EOF'
-          #include <stdbool.h>
-          #include <platform.h>
+          echo "===== RUNA target created from $BASE_TARGET ====="
+          echo "===== target.h important lines ====="
+          grep -nE "TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|ICM|42688|42605|GYRO|ACC|IMU|BARO|SPL06|MAX7456|AT7456|SDCARD|UART|SPI|I2C" src/main/target/RUNA_F405_WING/target.h || true
 
-          #include "drivers/io.h"
-          #include "drivers/pwm_mapping.h"
-          #include "drivers/timer.h"
-
-          timerHardware_t timerHardware[] = {
-              DEF_TIM(TIM4,  CH2, PB7,  TIM_USE_OUTPUT_AUTO, 1, 0), // MOTOR1
-              DEF_TIM(TIM4,  CH1, PB6,  TIM_USE_OUTPUT_AUTO, 1, 0), // MOTOR2
-
-              DEF_TIM(TIM3,  CH3, PB0,  TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO3
-              DEF_TIM(TIM3,  CH4, PB1,  TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO4
-              DEF_TIM(TIM8,  CH3, PC8,  TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO5
-              DEF_TIM(TIM8,  CH4, PC9,  TIM_USE_OUTPUT_AUTO, 1, 0), // SERVO6
-
-              DEF_TIM(TIM2,  CH1, PA15, TIM_USE_LED,         0, 0),
-              DEF_TIM(TIM5,  CH3, PA2,  TIM_USE_ANY,         0, 0),
-          };
-
-          const int timerHardwareCount = sizeof(timerHardware) / sizeof(timerHardware[0]);
-          EOF
-
-            echo "===== $T target check ====="
-            grep -nE "USBD_PRODUCT_STRING|RUNA_AXIS_MAP|IMU_LSM6DXX_ALIGN|SPI3_MISO|SPI3_MOSI" "src/main/target/$T/target.h" || true
-          }
-
-          create_target RUNA_MAP_A RUNA_AXIS_MAP_A
-          create_target RUNA_MAP_B RUNA_AXIS_MAP_B
-          create_target RUNA_MAP_C RUNA_AXIS_MAP_C
-          create_target RUNA_MAP_D RUNA_AXIS_MAP_D
+          echo "===== target folder ====="
+          ls -la src/main/target/RUNA_F405_WING
 
       - name: Configure
         run: |
           cd inav
+          rm -rf build
           mkdir -p build
           cd build
           cmake ..
 
-      - name: Build all RUNA map variants
+      - name: Build RUNA_F405_WING
         run: |
           cd inav/build
-
-          for T in RUNA_MAP_A RUNA_MAP_B RUNA_MAP_C RUNA_MAP_D; do
-            echo "===== BUILD $T ====="
-            make "$T" -j$(nproc)
-          done
+          make RUNA_F405_WING -j$(nproc)
 
       - name: Collect firmware HEX BIN ELF
         run: |
           mkdir -p out
 
-          for T in RUNA_MAP_A RUNA_MAP_B RUNA_MAP_C RUNA_MAP_D; do
-            echo "===== COLLECT $T ====="
+          echo "===== Find built firmware ====="
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
 
-            ELF=$(find inav/build -type f -name "${T}.elf" | head -n 1)
+          ELF=$(find inav/build -type f -name "RUNA_F405_WING.elf" | head -n 1)
 
-            if [ -z "$ELF" ]; then
-              ELF=$(find inav/build -type f -name "*${T}*.elf" | head -n 1)
-            fi
+          if [ -z "$ELF" ]; then
+            ELF=$(find inav/build -type f -name "*RUNA_F405_WING*.elf" | head -n 1)
+          fi
 
-            if [ -z "$ELF" ]; then
-              echo "ERROR: ELF not found for $T"
-              find inav/build -type f -name "*.elf" -print
-              exit 1
-            fi
+          if [ -z "$ELF" ]; then
+            echo "ERROR: ELF not found"
+            find inav/build -type f -name "*.elf" -print
+            exit 1
+          fi
 
-            echo "Found ELF: $ELF"
+          echo "Found ELF: $ELF"
 
-            cp "$ELF" "out/${T}_v39_SCALE8.elf"
+          cp "$ELF" out/RUNA_F405_WING_v40_SPEEDYBEE_BASE.elf
 
-            arm-none-eabi-objcopy -O ihex "$ELF" "out/${T}_v39_SCALE8.hex"
-            arm-none-eabi-objcopy -O binary "$ELF" "out/${T}_v39_SCALE8.bin"
-          done
+          arm-none-eabi-objcopy -O ihex "$ELF" out/RUNA_F405_WING_v40_SPEEDYBEE_BASE.hex
+          arm-none-eabi-objcopy -O binary "$ELF" out/RUNA_F405_WING_v40_SPEEDYBEE_BASE.bin
 
           echo "===== OUT ====="
-          ls -la out
+          ls -lh out
 
-      - name: Upload all RUNA map variants
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_v39_INAV801_AXIS_MAP_TEST_PACK_SCALE8_HEX_FIXED_2
+          name: RUNA_F405_WING_v40_SPEEDYBEE_BASE
           path: out/*
