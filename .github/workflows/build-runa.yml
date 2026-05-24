@@ -1,4 +1,4 @@
-name: RUNA v39 INAV 8.0.1 AXIS MAP TEST PACK
+name: RUNA v39 INAV 8.0.1 AXIS MAP TEST PACK HEX FIX
 
 on:
   workflow_dispatch:
@@ -19,14 +19,10 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
-          import re
 
           p = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
           s = p.read_text()
 
-          # ============================================================
-          # 1. Add RUNA chip ID 0x70
-          # ============================================================
           if "RUNA_LSM6DSV16X_CHIP_ID" not in s:
               marker = "#define LSM6DS3_CHIP_ID 0x69"
               insert = (
@@ -40,9 +36,6 @@ jobs:
               else:
                   print("WARNING: LSM6DS3_CHIP_ID marker not found")
 
-          # ============================================================
-          # 2. Accept WHO_AM_I 0x70 in detect switch
-          # ============================================================
           if "case RUNA_LSM6DSV16X_CHIP_ID:" not in s:
               if "case LSM6DSL_CHIP_ID:" in s:
                   s = s.replace(
@@ -57,9 +50,6 @@ jobs:
               else:
                   print("WARNING: detect switch marker not found")
 
-          # ============================================================
-          # 3. Init for 0x70, based on the version where GYRO/ACC were OK
-          # ============================================================
           old_init = (
               "    // Configure the accelerometer\n"
               "    // 833hz ODR, 16G scale, use LPF2 output (default with ODR/4 cutoff)\n"
@@ -137,9 +127,6 @@ jobs:
               else:
                   print("WARNING: init block not found")
 
-          # ============================================================
-          # 4. Gyro scale /8
-          # ============================================================
           old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
           old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
 
@@ -160,11 +147,6 @@ jobs:
               else:
                   print("WARNING: gyro scale line not found")
 
-          # ============================================================
-          # 5. ACC axis map
-          # Works with INAV 8 format:
-          # acc->ADCRaw[X] = (float) int16_val_little_endian(data, 0);
-          # ============================================================
           if "RUNA_ACC_AXIS_MAP_V39" not in s:
               acc_old = (
                   "    acc->ADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
@@ -206,9 +188,6 @@ jobs:
               else:
                   print("WARNING: ACC int16_val_little_endian block not found")
 
-          # ============================================================
-          # 6. GYRO axis map
-          # ============================================================
           if "RUNA_GYRO_AXIS_MAP_V39" not in s:
               gyro_old = (
                   "    gyro->gyroADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
@@ -493,25 +472,38 @@ jobs:
             make "$T" -j$(nproc)
           done
 
-      - name: Collect firmware
+      - name: Collect firmware HEX BIN ELF
         run: |
           mkdir -p out
 
           for T in RUNA_MAP_A RUNA_MAP_B RUNA_MAP_C RUNA_MAP_D; do
             echo "===== COLLECT $T ====="
-            find inav/build -type f -name "$T*.hex" -exec cp {} "out/${T}_v39_SCALE8.hex" \; || true
-            find inav/build -type f -name "$T*.bin" -exec cp {} "out/${T}_v39_SCALE8.bin" \; || true
-            find inav/build -type f -name "$T*.elf" -exec cp {} "out/${T}_v39_SCALE8.elf" \; || true
+
+            ELF=$(find inav/build -type f -name "${T}.elf" | head -n 1)
+
+            if [ -z "$ELF" ]; then
+              ELF=$(find inav/build -type f -name "*${T}*.elf" | head -n 1)
+            fi
+
+            if [ -z "$ELF" ]; then
+              echo "ERROR: ELF not found for $T"
+              find inav/build -type f -name "*.elf" -print
+              exit 1
+            fi
+
+            echo "Found ELF: $ELF"
+
+            cp "$ELF" "out/${T}_v39_SCALE8.elf"
+
+            arm-none-eabi-objcopy -O ihex "$ELF" "out/${T}_v39_SCALE8.hex"
+            arm-none-eabi-objcopy -O binary "$ELF" "out/${T}_v39_SCALE8.bin"
           done
 
           echo "===== OUT ====="
           ls -la out
 
-          echo "===== ALL FIRMWARE FOUND ====="
-          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print
-
       - name: Upload all RUNA map variants
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_v39_INAV801_AXIS_MAP_TEST_PACK_SCALE8
+          name: RUNA_v39_INAV801_AXIS_MAP_TEST_PACK_SCALE8_HEX_FIXED
           path: out/*
