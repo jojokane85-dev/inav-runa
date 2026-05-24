@@ -1,4 +1,4 @@
-name: RUNA v40 INAV 8.0.1 SPEEDYBEE BASE
+name: RUNA v40 LITE INAV 8.0.1 SPEEDYBEE BASE
 
 on:
   workflow_dispatch:
@@ -29,16 +29,18 @@ jobs:
         run: |
           cd inav
 
-          echo "===== TARGETS WITH SPEEDY ====="
+          echo "===== SPEEDYBEE TARGET FOLDERS ====="
           find src/main/target -maxdepth 1 -type d | grep -i speedy || true
 
-          echo "===== MAKE HELP SPEEDY ====="
+          echo "===== CONFIGURE FOR MAKE HELP ====="
           mkdir -p build
           cd build
           cmake ..
+
+          echo "===== MAKE HELP SPEEDY ====="
           make help | grep -i speedy || true
 
-      - name: Create RUNA target from SPEEDYBEEF405WING
+      - name: Create RUNA_F405_WING LITE from SpeedyBee target
         run: |
           cd inav
 
@@ -55,8 +57,7 @@ jobs:
           fi
 
           if [ -z "$BASE_TARGET" ]; then
-            echo "ERROR: SpeedyBee F405 Wing target not found in INAV 8.0.1"
-            echo "Available SpeedyBee targets:"
+            echo "ERROR: SpeedyBee F405 Wing target not found"
             find src/main/target -maxdepth 1 -type d | grep -i speedy || true
             exit 1
           fi
@@ -65,14 +66,13 @@ jobs:
 
           rm -rf src/main/target/RUNA_F405_WING
           mkdir -p src/main/target/RUNA_F405_WING
-
           cp -r "src/main/target/$BASE_TARGET/"* src/main/target/RUNA_F405_WING/
 
           cat > src/main/target/RUNA_F405_WING/CMakeLists.txt <<'EOF'
           target_stm32f405xg(RUNA_F405_WING)
           EOF
 
-          echo "===== Patch RUNA name only ====="
+          echo "===== Patch target name and disable heavy features ====="
 
           sed -i '/TARGET_BOARD_IDENTIFIER/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/USBD_PRODUCT_STRING/d' src/main/target/RUNA_F405_WING/target.h || true
@@ -80,12 +80,24 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v40
-           * Base: SPEEDYBEEF405WING
+           * RUNA_F405_WING v40 LITE
+           * Base: SpeedyBee F405 Wing
            * INAV 8.0.1
-           * No LSM6DXX patch.
-           * No manual axis map.
-           * No gyro scale hack.
+           *
+           * Purpose:
+           * - verify correct GYRO/ACC on real board
+           * - keep firmware small enough to flash
+           *
+           * Disabled for size:
+           * - OSD / MAX7456 / AT7456
+           * - SDCARD / BLACKBOX
+           * - BARO
+           * - MAG
+           * - GPS
+           * - VTX
+           * - LED STRIP
+           * - PINIO
+           * - SOFTSERIAL
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -94,11 +106,106 @@ jobs:
           #undef USBD_PRODUCT_STRING
           #define USBD_PRODUCT_STRING "RUNA_F405_WING"
 
+          /* ---------- LITE SIZE CUTS ---------- */
+
+          #undef USE_MAX7456
+          #undef USE_AT7456E
+          #undef MAX7456_SPI_BUS
+          #undef MAX7456_CS_PIN
+
+          #undef USE_OSD
+          #undef USE_OSD_SD
+          #undef USE_OSD_HD
+          #undef USE_OSD_QUICK_MENU
+          #undef USE_CMS
+          #undef USE_CMS_FAILSAFE_MENU
+          #undef USE_DASHBOARD
+
+          #undef USE_SDCARD
+          #undef USE_SDCARD_SPI
+          #undef SDCARD_SPI_BUS
+          #undef SDCARD_CS_PIN
+          #undef USE_BLACKBOX
+          #undef USE_FLASHFS
+          #undef USE_FLASH_M25P16
+
+          #undef USE_BARO
+          #undef USE_BARO_BMP085
+          #undef USE_BARO_BMP280
+          #undef USE_BARO_BMP388
+          #undef USE_BARO_MS5611
+          #undef USE_BARO_SPL06
+          #undef BARO_I2C_BUS
+          #undef BARO_SPI_BUS
+          #undef BARO_CS_PIN
+
+          #undef USE_MAG
+          #undef USE_MAG_HMC5883
+          #undef USE_MAG_QMC5883
+          #undef USE_MAG_LIS3MDL
+          #undef USE_MAG_MPU9250
+          #undef USE_MAG_IST8310
+          #undef USE_MAG_IST8308
+          #undef MAG_I2C_BUS
+          #undef MAG_SPI_BUS
+          #undef MAG_CS_PIN
+
+          #undef USE_GPS
+          #undef USE_GPS_PROTO_UBLOX
+          #undef USE_GPS_PROTO_NMEA
+          #undef USE_GPS_PROTO_MTK
+          #undef USE_GPS_PROTO_I2C_NAV
+
+          #undef USE_VTX_COMMON
+          #undef USE_VTX_SMARTAUDIO
+          #undef USE_VTX_TRAMP
+          #undef USE_VTX_MSP
+          #undef USE_VTX_TABLE
+
+          #undef USE_LED_STRIP
+          #undef USE_LED_STRIP_STATUS_MODE
+          #undef USE_LED_STRIP_RGB
+          #undef USE_LED_STRIP_GRB
+          #undef LED_STRIP_PIN
+
+          #undef USE_PINIO
+          #undef USE_PINIOBOX
+          #undef PINIO1_PIN
+          #undef PINIO2_PIN
+          #undef PINIO3_PIN
+          #undef PINIO4_PIN
+
+          #undef USE_SOFTSERIAL1
+          #undef USE_SOFTSERIAL2
+          #undef SOFTSERIAL_1_TX_PIN
+          #undef SOFTSERIAL_1_RX_PIN
+          #undef SOFTSERIAL_2_TX_PIN
+          #undef SOFTSERIAL_2_RX_PIN
+
+          #undef USE_RANGEFINDER
+          #undef USE_RANGEFINDER_HCSR04
+          #undef USE_RANGEFINDER_SRF10
+          #undef USE_RANGEFINDER_VL53L0X
+          #undef USE_RANGEFINDER_VL53L1X
+          #undef RANGEFINDER_I2C_BUS
+
+          #undef USE_PITOT
+          #undef USE_PITOT_MS4525
+          #undef USE_PITOT_DLVR
+          #undef USE_PITOT_ADC
+          #undef PITOT_I2C_BUS
+          #undef PITOT_ADC_CHANNEL
+
+          #undef USE_OPFLOW
+          #undef USE_OPFLOW_CXOF
+          #undef USE_OPFLOW_MSP
+          #undef USE_OPFLOW_FAKE
+
           EOF
 
-          echo "===== RUNA target created from $BASE_TARGET ====="
-          echo "===== target.h important lines ====="
-          grep -nE "TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|ICM|42688|42605|GYRO|ACC|IMU|BARO|SPL06|MAX7456|AT7456|SDCARD|UART|SPI|I2C" src/main/target/RUNA_F405_WING/target.h || true
+          echo "===== RUNA LITE target created from $BASE_TARGET ====="
+          echo "===== important target.h lines ====="
+          grep -nE "TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|ICM|42688|42605|GYRO|ACC|IMU|BARO|MAG|MAX7456|AT7456|SDCARD|BLACKBOX|VTX|GPS|LED|PINIO|SOFTSERIAL|UART|SPI|I2C" src/main/target/RUNA_F405_WING/target.h || true
 
           echo "===== target folder ====="
           ls -la src/main/target/RUNA_F405_WING
@@ -111,7 +218,7 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build RUNA_F405_WING
+      - name: Build RUNA_F405_WING LITE
         run: |
           cd inav/build
           make RUNA_F405_WING -j$(nproc)
@@ -137,16 +244,16 @@ jobs:
 
           echo "Found ELF: $ELF"
 
-          cp "$ELF" out/RUNA_F405_WING_v40_SPEEDYBEE_BASE.elf
+          cp "$ELF" out/RUNA_F405_WING_v40_LITE_SPEEDYBEE_BASE.elf
 
-          arm-none-eabi-objcopy -O ihex "$ELF" out/RUNA_F405_WING_v40_SPEEDYBEE_BASE.hex
-          arm-none-eabi-objcopy -O binary "$ELF" out/RUNA_F405_WING_v40_SPEEDYBEE_BASE.bin
+          arm-none-eabi-objcopy -O ihex "$ELF" out/RUNA_F405_WING_v40_LITE_SPEEDYBEE_BASE.hex
+          arm-none-eabi-objcopy -O binary "$ELF" out/RUNA_F405_WING_v40_LITE_SPEEDYBEE_BASE.bin
 
-          echo "===== OUT ====="
+          echo "===== SIZE ====="
           ls -lh out
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_F405_WING_v40_SPEEDYBEE_BASE
+          name: RUNA_F405_WING_v40_LITE_SPEEDYBEE_BASE
           path: out/*
