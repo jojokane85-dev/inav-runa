@@ -1,4 +1,4 @@
-name: RUNA v39 INAV 8.0.1 AXIS MAP TEST PACK HEX FIX
+name: RUNA v39 INAV 8.0.1 AXIS MAP TEST PACK HEX FIX 2
 
 on:
   workflow_dispatch:
@@ -12,6 +12,12 @@ jobs:
       - name: Checkout INAV 8.0.1
         run: |
           git clone --recursive --branch 8.0.1 https://github.com/iNavFlight/inav.git inav
+
+      - name: Install ARM objcopy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-arm-none-eabi
+          which arm-none-eabi-objcopy
 
       - name: Patch LSM6DXX for RUNA LSM6DSV16X 0x70 axis map pack
         run: |
@@ -505,5 +511,5 @@ jobs:
       - name: Upload all RUNA map variants
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_v39_INAV801_AXIS_MAP_TEST_PACK_SCALE8_HEX_FIXED
+          name: RUNA_v39_INAV801_AXIS_MAP_TEST_PACK_SCALE8_HEX_FIXED_2
           path: out/*
