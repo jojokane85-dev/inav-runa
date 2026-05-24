@@ -1,4 +1,4 @@
-name: RUNA v40 LITE FIX7 INAV 8.0.1 SPEEDYBEE BASE
+name: RUNA v40 LITE FIX8 INAV 8.0.1 SPEEDYBEE BASE
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           echo "===== MAKE HELP SPEEDY ====="
           make help | grep -i speedy || true
 
-      - name: Create RUNA_F405_WING LITE FIX7 from SpeedyBee target
+      - name: Create RUNA_F405_WING LITE FIX8 from SpeedyBee target
         run: |
           cd inav
 
@@ -80,7 +80,7 @@ jobs:
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v40 LITE FIX7
+           * RUNA_F405_WING v40 LITE FIX8
            * Base: SpeedyBee F405 Wing
            * INAV 8.0.1
            *
@@ -229,7 +229,7 @@ jobs:
 
           EOF
 
-          echo "===== RUNA LITE FIX7 target created from $BASE_TARGET ====="
+          echo "===== RUNA LITE FIX8 target created from $BASE_TARGET ====="
           echo "===== important target.h lines ====="
           grep -nE "TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|ICM|42688|42605|GYRO|ACC|IMU|BARO|MAG|MAX7456|AT7456|OSD|SDCARD|BLACKBOX|VTX|GPS|GEOZONE|WIND|PITOT|LED|PINIO|SOFTSERIAL|UART|SPI|I2C" src/main/target/RUNA_F405_WING/target.h || true
 
@@ -288,6 +288,32 @@ jobs:
 
           grep -n "RUNA_LITE_VTX_SETTINGS_FIX\|VTX_SETTINGS_MIN_POWER" src/main/programming/logic_condition.c | head -20
 
+      - name: Patch CMS blackbox menu for LITE build
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("src/main/cms/cms_menu_blackbox.c")
+          s = p.read_text()
+
+          if "RUNA_LITE_BLACKBOX_SETTING_FIX" not in s:
+              s = s.replace(
+                  "#include",
+                  "/* RUNA_LITE_BLACKBOX_SETTING_FIX */\n"
+                  "#ifndef SETTING_BLACKBOX_RATE_DENOM\n"
+                  "#define SETTING_BLACKBOX_RATE_DENOM 0\n"
+                  "#endif\n\n"
+                  "#include",
+                  1
+              )
+
+          p.write_text(s)
+          PY
+
+          grep -n "RUNA_LITE_BLACKBOX_SETTING_FIX\|SETTING_BLACKBOX_RATE_DENOM" src/main/cms/cms_menu_blackbox.c | head -20
+
       - name: Configure
         run: |
           cd inav
@@ -296,7 +322,7 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build RUNA_F405_WING LITE FIX7
+      - name: Build RUNA_F405_WING LITE FIX8
         run: |
           cd inav/build
           make RUNA_F405_WING -j$(nproc)
@@ -322,10 +348,10 @@ jobs:
 
           echo "Found ELF: $ELF"
 
-          cp "$ELF" out/RUNA_F405_WING_v40_LITE_FIX7_SPEEDYBEE_BASE.elf
+          cp "$ELF" out/RUNA_F405_WING_v40_LITE_FIX8_SPEEDYBEE_BASE.elf
 
-          arm-none-eabi-objcopy -O ihex "$ELF" out/RUNA_F405_WING_v40_LITE_FIX7_SPEEDYBEE_BASE.hex
-          arm-none-eabi-objcopy -O binary "$ELF" out/RUNA_F405_WING_v40_LITE_FIX7_SPEEDYBEE_BASE.bin
+          arm-none-eabi-objcopy -O ihex "$ELF" out/RUNA_F405_WING_v40_LITE_FIX8_SPEEDYBEE_BASE.hex
+          arm-none-eabi-objcopy -O binary "$ELF" out/RUNA_F405_WING_v40_LITE_FIX8_SPEEDYBEE_BASE.bin
 
           echo "===== SIZE ====="
           ls -lh out
@@ -333,5 +359,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_F405_WING_v40_LITE_FIX7_SPEEDYBEE_BASE
+          name: RUNA_F405_WING_v40_LITE_FIX8_SPEEDYBEE_BASE
           path: out/*
