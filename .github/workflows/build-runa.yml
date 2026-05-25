@@ -1,4 +1,4 @@
-name: Build RUNA FC 5.1 Custom
+name: Build RUNA FC 5.1 Custom Fixed Version
 
 on:
   workflow_dispatch:
@@ -7,14 +7,16 @@ on:
         description: "FC target"
         required: true
         default: "SPEEDYBEEF405WING"
+
       runa_name:
         description: "RUNA name, must be same length or shorter than target"
         required: true
         default: "RUNA_FC51_F405WG"
+
       inav_ref:
-        description: "INAV branch/tag"
+        description: "Fixed INAV version/tag. Do NOT use master."
         required: true
-        default: "master"
+        default: "7.1.2"
 
 jobs:
   build-runa:
@@ -36,12 +38,25 @@ jobs:
             curl \
             unzip
 
-      - name: Clone INAV
+      - name: Clone fixed INAV version
         run: |
           git clone --recursive https://github.com/iNavFlight/inav.git inav
           cd inav
+          git fetch --tags
           git checkout "${{ github.event.inputs.inav_ref }}"
           git submodule update --init --recursive
+
+      - name: Show INAV version info
+        run: |
+          cd inav
+          echo "================================"
+          echo "RUNA CUSTOM BUILD"
+          echo "Target: ${{ github.event.inputs.target }}"
+          echo "RUNA name: ${{ github.event.inputs.runa_name }}"
+          echo "INAV ref: ${{ github.event.inputs.inav_ref }}"
+          echo "================================"
+          git log -1 --oneline
+          git describe --tags --always || true
 
       - name: Create RUNA patch script
         run: |
@@ -56,13 +71,15 @@ jobs:
               data = path.read_bytes()
 
               if old not in data:
-                  print(f"[SKIP] {path.name}: target name not found")
+                  print(f"[SKIP] {path.name}: target string not found")
                   return False
 
               if len(new) > len(old):
                   raise ValueError(
-                      f"RUNA name too long: {new.decode()} "
-                      f"({len(new)}) > {old.decode()} ({len(old)})"
+                      f"RUNA name too long: {new.decode(errors='ignore')} "
+                      f"({len(new)} bytes) > target name "
+                      f"{old.decode(errors='ignore')} ({len(old)} bytes). "
+                      f"Use shorter runa_name."
                   )
 
               new_padded = new + b"\x00" * (len(old) - len(new))
@@ -83,6 +100,9 @@ jobs:
               old = args.old.encode("ascii")
               new = args.new.encode("ascii")
 
+              if not folder.exists():
+                  raise FileNotFoundError(folder)
+
               files = []
               for pattern in ("*.hex", "*.bin", "*.elf"):
                   files.extend(folder.rglob(pattern))
@@ -91,6 +111,7 @@ jobs:
                   raise RuntimeError("No firmware files found")
 
               count = 0
+
               for f in files:
                   try:
                       if patch_file(f, old, new):
@@ -99,6 +120,9 @@ jobs:
                       print(f"[ERROR] {f}: {e}")
 
               print(f"Patched files: {count}")
+
+              if count == 0:
+                  print("WARNING: no files patched. Firmware built, but name may remain original.")
 
           if __name__ == "__main__":
               main()
@@ -109,8 +133,9 @@ jobs:
           mkdir -p cli
 
           cat > cli/RUNA_FC51_VTX_5G8.cli <<'CLI'
-          # RUNA FC 5.1 VTX 5.8
-          # Частоты RUNA: 5820 / 5695 / 5733
+          # RUNA FC 5.1 - VTX 5.8
+          # Частоты RUNA:
+          # 5820 / 5695 / 5733
 
           set vtx_band = 5
           set vtx_channel = 3
@@ -121,8 +146,10 @@ jobs:
           CLI
 
           cat > cli/RUNA_FC51_VTX_3G3.cli <<'CLI'
-          # RUNA FC 5.1 VTX 3.3
-          # Только если VTX реально поддерживает 3.3 GHz
+          # RUNA FC 5.1 - VTX 3.3
+          # ВНИМАНИЕ:
+          # Использовать только если VTX реально поддерживает 3.3 GHz.
+          # Обычный VTX 5.8 на 3.3 GHz работать не будет.
 
           set vtx_band = 1
           set vtx_channel = 1
@@ -136,43 +163,74 @@ jobs:
           # RUNA FC 5.1
           # ШТОРА + VTX POWER ARM/DISARM
 
-          # DISARM -> low power / power 1
-          # ARM    -> vtx_power 5
+          # Нужно:
+          # DISARM -> VTX low power / power 1
+          # ARM    -> VTX power 5
 
           set vtx_power = 5
           set vtx_low_power_disarm = ON
 
           # ШТОРА:
+          #
           # В INAV Configurator:
           #
-          # OSD Layout 0 = обычный экран
-          # OSD Layout 1 = шторка
+          # 1. OSD -> Layout 0 = обычный экран
+          # 2. OSD -> Layout 1 = шторка
+          # 3. В Layout 1 убери высоту/лишние элементы
+          # 4. Modes -> назначить CH8/AUX4:
           #
-          # CH8 / AUX4:
-          # LOW/MID 900-1666  = Layout 0
-          # HIGH    1667-2100 = Layout 1 / ШТОРА
+          # LOW/MID 900-1666  = обычный экран / Layout 0
+          # HIGH    1667-2100 = шторка / Layout 1
+          #
+          # CLI-команды OSD Layout в разных версиях INAV могут отличаться,
+          # поэтому саму штору безопаснее назначать через Configurator.
 
           save
           CLI
 
-          cat > cli/RUNA_FC51_ALL_IN_ONE.cli <<'CLI'
-          # RUNA FC 5.1 ALL IN ONE
-          # Безопасный CLI: не трогает оси, UART, моторы, сервы и mixer
+          cat > cli/RUNA_FC51_ALL_IN_ONE_SAFE.cli <<'CLI'
+          # RUNA FC 5.1 - ALL IN ONE SAFE CLI
+          #
+          # Этот файл НЕ трогает:
+          # - gyro axes
+          # - board alignment
+          # - UART
+          # - motors
+          # - servos
+          # - mixer
+          #
+          # Поэтому меньше шанс снова получить проблему,
+          # где работает только YAW.
 
-          # VTX 5.8 default
+          # -------------------------------
+          # VTX 5.8 DEFAULT
+          # -------------------------------
+
           set vtx_band = 5
           set vtx_channel = 3
           set vtx_freq = 5733
           set vtx_power = 5
 
-          # DISARM -> low power
-          # ARM -> power 5
+          # -------------------------------
+          # DISARM / ARM VTX POWER
+          # -------------------------------
+
+          # DISARM -> low power / power 1
+          # ARM    -> vtx_power 5
+
           set vtx_low_power_disarm = ON
 
-          # ШТОРА:
+          # -------------------------------
+          # ШТОРА
+          # -------------------------------
+          #
+          # Настроить руками в INAV Configurator:
+          #
           # OSD Layout 0 = обычный экран
           # OSD Layout 1 = шторка
-          # CH8/AUX4 HIGH = шторка
+          #
+          # CH8/AUX4 LOW/MID = Layout 0
+          # CH8/AUX4 HIGH    = Layout 1
 
           save
           CLI
@@ -184,7 +242,7 @@ jobs:
           cmake ..
           make "${{ github.event.inputs.target }}" -j"$(nproc)"
 
-      - name: Patch RUNA name
+      - name: Patch firmware name to RUNA
         run: |
           python3 scripts/patch_runa_name.py \
             --folder inav/build \
@@ -201,7 +259,7 @@ jobs:
           cp cli/*.cli artifact/cli/
 
           cat > artifact/RUNA_INFO.txt <<EOF
-          RUNA FC 5.1 CUSTOM
+          RUNA FC 5.1 CUSTOM FIXED VERSION
 
           Base target:
           ${{ github.event.inputs.target }}
@@ -209,26 +267,53 @@ jobs:
           RUNA name:
           ${{ github.event.inputs.runa_name }}
 
+          INAV version/tag:
+          ${{ github.event.inputs.inav_ref }}
+
+          IMPORTANT:
+          This workflow uses fixed INAV tag:
+          ${{ github.event.inputs.inav_ref }}
+
+          It does NOT use master.
+          So it should NOT accidentally build INAV 9.0.1.
+
           Functions:
+          - RUNA name patch
           - VTX 5.8
           - VTX 3.3
-          - ШТОРА
+          - ШТОРА / OSD Layout idea
           - DISARM -> VTX low power / power 1
           - ARM -> VTX power 5
 
-          After flashing:
-          1. Open INAV Configurator
-          2. Open CLI
-          3. Paste:
-             cli/RUNA_FC51_ALL_IN_ONE.cli
-
-          Or separately:
+          CLI files:
           - cli/RUNA_FC51_VTX_5G8.cli
           - cli/RUNA_FC51_VTX_3G3.cli
           - cli/RUNA_FC51_SHUTTER_ARM_DISARM.cli
+          - cli/RUNA_FC51_ALL_IN_ONE_SAFE.cli
 
-          IMPORTANT:
-          This build does not touch gyro axes, UART, motors, servos or mixer.
+          After flashing:
+          1. Open INAV Configurator
+          2. Connect FC
+          3. Open CLI
+          4. Paste:
+             cli/RUNA_FC51_ALL_IN_ONE_SAFE.cli
+
+          Or separately:
+          1. Paste VTX profile:
+             cli/RUNA_FC51_VTX_5G8.cli
+             or
+             cli/RUNA_FC51_VTX_3G3.cli
+
+          2. Paste:
+             cli/RUNA_FC51_SHUTTER_ARM_DISARM.cli
+
+          This build does not touch:
+          - gyro axes
+          - UART
+          - motors
+          - servos
+          - mixer
+          - receiver mapping
           EOF
 
           echo "=== ARTIFACT FILES ==="
@@ -237,5 +322,5 @@ jobs:
       - name: Upload RUNA firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_FC51_CUSTOM_FIRMWARE
+          name: RUNA_FC51_CUSTOM_FIXED
           path: artifact/
