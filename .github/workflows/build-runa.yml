@@ -1,4 +1,4 @@
-name: RUNA v40 LITE FIX8 INAV 8.0.1 SPEEDYBEE BASE
+name: RUNA v40 LITE FIX9 INAV 8.0.1 SPEEDYBEE BASE
 
 on:
   workflow_dispatch:
@@ -28,7 +28,6 @@ jobs:
       - name: Find SpeedyBee target
         run: |
           cd inav
-
           echo "===== SPEEDYBEE TARGET FOLDERS ====="
           find src/main/target -maxdepth 1 -type d | grep -i speedy || true
 
@@ -40,7 +39,7 @@ jobs:
           echo "===== MAKE HELP SPEEDY ====="
           make help | grep -i speedy || true
 
-      - name: Create RUNA_F405_WING LITE FIX8 from SpeedyBee target
+      - name: Create RUNA_F405_WING LITE FIX9 from SpeedyBee target
         run: |
           cd inav
 
@@ -72,23 +71,18 @@ jobs:
           target_stm32f405xg(RUNA_F405_WING)
           EOF
 
-          echo "===== Patch target name and disable heavy features ====="
-
           sed -i '/TARGET_BOARD_IDENTIFIER/d' src/main/target/RUNA_F405_WING/target.h || true
           sed -i '/USBD_PRODUCT_STRING/d' src/main/target/RUNA_F405_WING/target.h || true
 
           cat >> src/main/target/RUNA_F405_WING/target.h <<'EOF'
 
           /*
-           * RUNA_F405_WING v40 LITE FIX8
+           * RUNA_F405_WING v40 LITE FIX9
            * Base: SpeedyBee F405 Wing
            * INAV 8.0.1
            *
-           * USE_GPS НЕ отключаем.
-           * Иначе падает fc_msp.c.
-           *
-           * Это LITE-прошивка только для проверки GYRO/ACC.
-           * Для полёта её не использовать.
+           * LITE only for GYRO/ACC test.
+           * Do not use for flight.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -155,8 +149,8 @@ jobs:
           /* ---------- GPS / GEOZONE / WIND / NAV EXTRAS ---------- */
 
           /*
-           * НЕ ОТКЛЮЧАТЬ USE_GPS:
-           * #undef USE_GPS
+           * DO NOT undef USE_GPS.
+           * fc_msp.c needs GPS structures.
            */
 
           #undef USE_GPS_PROTO_MTK
@@ -229,12 +223,8 @@ jobs:
 
           EOF
 
-          echo "===== RUNA LITE FIX8 target created from $BASE_TARGET ====="
-          echo "===== important target.h lines ====="
+          echo "===== RUNA LITE FIX9 target created from $BASE_TARGET ====="
           grep -nE "TARGET_BOARD_IDENTIFIER|USBD_PRODUCT_STRING|ICM|42688|42605|GYRO|ACC|IMU|BARO|MAG|MAX7456|AT7456|OSD|SDCARD|BLACKBOX|VTX|GPS|GEOZONE|WIND|PITOT|LED|PINIO|SOFTSERIAL|UART|SPI|I2C" src/main/target/RUNA_F405_WING/target.h || true
-
-          echo "===== target folder ====="
-          ls -la src/main/target/RUNA_F405_WING
 
       - name: Patch OSD custom elements for LITE build
         run: |
@@ -278,6 +268,15 @@ jobs:
                   "/* RUNA_LITE_VTX_SETTINGS_FIX */\n"
                   "#ifndef VTX_SETTINGS_MIN_POWER\n"
                   "#define VTX_SETTINGS_MIN_POWER 0\n"
+                  "#endif\n"
+                  "#ifndef VTX_SETTINGS_POWER_COUNT\n"
+                  "#define VTX_SETTINGS_POWER_COUNT 1\n"
+                  "#endif\n"
+                  "#ifndef VTX_SETTINGS_BAND_COUNT\n"
+                  "#define VTX_SETTINGS_BAND_COUNT 1\n"
+                  "#endif\n"
+                  "#ifndef VTX_SETTINGS_CHANNEL_COUNT\n"
+                  "#define VTX_SETTINGS_CHANNEL_COUNT 1\n"
                   "#endif\n\n"
                   "#include",
                   1
@@ -286,7 +285,7 @@ jobs:
           p.write_text(s)
           PY
 
-          grep -n "RUNA_LITE_VTX_SETTINGS_FIX\|VTX_SETTINGS_MIN_POWER" src/main/programming/logic_condition.c | head -20
+          grep -n "RUNA_LITE_VTX_SETTINGS_FIX\|VTX_SETTINGS_" src/main/programming/logic_condition.c | head -30
 
       - name: Patch CMS blackbox menu for LITE build
         run: |
@@ -314,6 +313,41 @@ jobs:
 
           grep -n "RUNA_LITE_BLACKBOX_SETTING_FIX\|SETTING_BLACKBOX_RATE_DENOM" src/main/cms/cms_menu_blackbox.c | head -20
 
+      - name: Patch CMS VTX menu for LITE build
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("src/main/cms/cms_menu_vtx.c")
+          s = p.read_text()
+
+          if "RUNA_LITE_CMS_VTX_FIX" not in s:
+              s = s.replace(
+                  "#include",
+                  "/* RUNA_LITE_CMS_VTX_FIX */\n"
+                  "#ifndef VTX_SETTINGS_MIN_POWER\n"
+                  "#define VTX_SETTINGS_MIN_POWER 0\n"
+                  "#endif\n"
+                  "#ifndef VTX_SETTINGS_POWER_COUNT\n"
+                  "#define VTX_SETTINGS_POWER_COUNT 1\n"
+                  "#endif\n"
+                  "#ifndef VTX_SETTINGS_BAND_COUNT\n"
+                  "#define VTX_SETTINGS_BAND_COUNT 1\n"
+                  "#endif\n"
+                  "#ifndef VTX_SETTINGS_CHANNEL_COUNT\n"
+                  "#define VTX_SETTINGS_CHANNEL_COUNT 1\n"
+                  "#endif\n\n"
+                  "#include",
+                  1
+              )
+
+          p.write_text(s)
+          PY
+
+          grep -n "RUNA_LITE_CMS_VTX_FIX\|VTX_SETTINGS_" src/main/cms/cms_menu_vtx.c | head -30
+
       - name: Configure
         run: |
           cd inav
@@ -322,7 +356,7 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build RUNA_F405_WING LITE FIX8
+      - name: Build RUNA_F405_WING LITE FIX9
         run: |
           cd inav/build
           make RUNA_F405_WING -j$(nproc)
@@ -348,10 +382,10 @@ jobs:
 
           echo "Found ELF: $ELF"
 
-          cp "$ELF" out/RUNA_F405_WING_v40_LITE_FIX8_SPEEDYBEE_BASE.elf
+          cp "$ELF" out/RUNA_F405_WING_v40_LITE_FIX9_SPEEDYBEE_BASE.elf
 
-          arm-none-eabi-objcopy -O ihex "$ELF" out/RUNA_F405_WING_v40_LITE_FIX8_SPEEDYBEE_BASE.hex
-          arm-none-eabi-objcopy -O binary "$ELF" out/RUNA_F405_WING_v40_LITE_FIX8_SPEEDYBEE_BASE.bin
+          arm-none-eabi-objcopy -O ihex "$ELF" out/RUNA_F405_WING_v40_LITE_FIX9_SPEEDYBEE_BASE.hex
+          arm-none-eabi-objcopy -O binary "$ELF" out/RUNA_F405_WING_v40_LITE_FIX9_SPEEDYBEE_BASE.bin
 
           echo "===== SIZE ====="
           ls -lh out
@@ -359,5 +393,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_F405_WING_v40_LITE_FIX8_SPEEDYBEE_BASE
+          name: RUNA_F405_WING_v40_LITE_FIX9_SPEEDYBEE_BASE
           path: out/*
