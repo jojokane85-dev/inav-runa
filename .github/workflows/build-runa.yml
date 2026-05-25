@@ -1,4 +1,4 @@
-name: RUNA v41 LITE FIX2 LSM6DXX AXIS MAP PACK
+name: RUNA v41 LITE FIX3 LSM6DXX AXIS MAP PACK
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
           sudo apt-get install -y build-essential cmake git gcc-arm-none-eabi binutils-arm-none-eabi
           which arm-none-eabi-objcopy || true
 
-      - name: Patch LSM6DXX driver for RUNA v41 LITE FIX2 axis maps
+      - name: Patch LSM6DXX driver for RUNA v41 LITE FIX3 axis maps
         run: |
           cd inav
 
@@ -34,7 +34,7 @@ jobs:
                   "#define LSM6DS3_CHIP_ID 0x69",
                   "#define LSM6DS3_CHIP_ID 0x69\n"
                   "\n"
-                  "/* RUNA v41 LITE FIX2: allow LSM6DSV16X / 0x70 as LSM6DXX */\n"
+                  "/* RUNA v41 LITE FIX3: allow LSM6DSV16X / 0x70 as LSM6DXX */\n"
                   "#define RUNA_LSM6DSV16X_CHIP_ID 0x70\n"
               )
 
@@ -54,15 +54,15 @@ jobs:
           old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
 
           new_scale = (
-              "// RUNA_GYRO_SCALE_V41_LITE_FIX2\n"
+              "// RUNA_GYRO_SCALE_V41_LITE_FIX3\n"
               "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-              "        gyro->scale = 1.0f / (16.4f * 4.0f); // RUNA v41 LITE FIX2 scale /4\n"
+              "        gyro->scale = 1.0f / (16.4f * 4.0f); // RUNA v41 LITE FIX3 scale /4\n"
               "    } else {\n"
               "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
               "    }"
           )
 
-          if "RUNA_GYRO_SCALE_V41_LITE_FIX2" not in s:
+          if "RUNA_GYRO_SCALE_V41_LITE_FIX3" not in s:
               if old_scale_1 in s:
                   s = s.replace(old_scale_1, new_scale, 1)
               elif old_scale_2 in s:
@@ -70,7 +70,7 @@ jobs:
               else:
                   print("WARNING: gyro scale line not found")
 
-          if "RUNA_ACC_AXIS_MAP_V41_LITE_FIX2" not in s:
+          if "RUNA_ACC_AXIS_MAP_V41_LITE_FIX3" not in s:
               acc_old = (
                   "    acc->ADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
                   "    acc->ADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
@@ -78,7 +78,7 @@ jobs:
               )
 
               acc_new = (
-                  "    // RUNA_ACC_AXIS_MAP_V41_LITE_FIX2\n"
+                  "    // RUNA_ACC_AXIS_MAP_V41_LITE_FIX3\n"
                   "    const float runaAccOldX = (float) int16_val_little_endian(data, 0);\n"
                   "    const float runaAccOldY = (float) int16_val_little_endian(data, 1);\n"
                   "    const float runaAccOldZ = (float) int16_val_little_endian(data, 2);\n"
@@ -119,7 +119,7 @@ jobs:
               else:
                   print("WARNING: ACC block not found")
 
-          if "RUNA_GYRO_AXIS_MAP_V41_LITE_FIX2" not in s:
+          if "RUNA_GYRO_AXIS_MAP_V41_LITE_FIX3" not in s:
               gyro_old = (
                   "    gyro->gyroADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
                   "    gyro->gyroADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
@@ -127,7 +127,7 @@ jobs:
               )
 
               gyro_new = (
-                  "    // RUNA_GYRO_AXIS_MAP_V41_LITE_FIX2\n"
+                  "    // RUNA_GYRO_AXIS_MAP_V41_LITE_FIX3\n"
                   "    const float runaGyroOldX = (float) int16_val_little_endian(data, 0);\n"
                   "    const float runaGyroOldY = (float) int16_val_little_endian(data, 1);\n"
                   "    const float runaGyroOldZ = (float) int16_val_little_endian(data, 2);\n"
@@ -171,9 +171,9 @@ jobs:
           p.write_text(s)
           PY
 
-          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE_V41_LITE_FIX2|RUNA_ACC_AXIS_MAP_V41_LITE_FIX2|RUNA_GYRO_AXIS_MAP_V41_LITE_FIX2|RUNA_AXIS_MAP" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE_V41_LITE_FIX3|RUNA_ACC_AXIS_MAP_V41_LITE_FIX3|RUNA_GYRO_AXIS_MAP_V41_LITE_FIX3|RUNA_AXIS_MAP" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
-      - name: Create RUNA v41 LITE FIX2 map targets
+      - name: Create RUNA v41 LITE FIX3 map targets
         run: |
           cd inav
 
@@ -198,13 +198,9 @@ jobs:
 
           /*
            * $T
-           * RUNA v41 LITE FIX2 axis map test
+           * RUNA v41 LITE FIX3 axis map test
            * Base: MATEKF405SE pinout + LSM6DXX 0x70 patch
            * $MAP_DEFINE
-           *
-           * ВАЖНО:
-           * Не удаляем строки из target.h через sed, чтобы не ломать #if/#endif.
-           * Всё отключаем только через #undef в конце файла.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -214,8 +210,6 @@ jobs:
           #define USBD_PRODUCT_STRING "$T"
 
           #define $MAP_DEFINE
-
-          /* ---------- FORCE ONLY LSM6DXX IMU ---------- */
 
           #undef USE_IMU_MPU6000
           #undef USE_IMU_MPU6500
@@ -242,8 +236,6 @@ jobs:
           #define LSM6DXX_CS_PIN PA4
           #define LSM6DXX_SPI_BUS BUS_SPI1
 
-          /* ---------- SPI1 FOR IMU ---------- */
-
           #define USE_SPI
           #define USE_SPI_DEVICE_1
 
@@ -258,8 +250,6 @@ jobs:
 
           #undef SPI1_MOSI_PIN
           #define SPI1_MOSI_PIN PA7
-
-          /* ---------- LITE SIZE CUTS ---------- */
 
           #undef USE_OSD
           #undef USE_OSD_SD
@@ -400,6 +390,15 @@ jobs:
                   "#ifndef VTX_SETTINGS_BAND_COUNT\n#define VTX_SETTINGS_BAND_COUNT 1\n#endif\n"
                   "#ifndef VTX_SETTINGS_CHANNEL_COUNT\n#define VTX_SETTINGS_CHANNEL_COUNT 1\n#endif\n"
               ),
+              (
+                  "src/main/io/vtx.c",
+                  "RUNA_LITE_IO_VTX_FIX",
+                  "#ifndef SETTING_VTX_MAX_POWER_OVERRIDE_DEFAULT\n#define SETTING_VTX_MAX_POWER_OVERRIDE_DEFAULT 0\n#endif\n"
+                  "#ifndef SETTING_VTX_FREQUENCY_GROUP_DEFAULT\n#define SETTING_VTX_FREQUENCY_GROUP_DEFAULT 0\n#endif\n"
+                  "#ifndef SETTING_VTX_POWER_DEFAULT\n#define SETTING_VTX_POWER_DEFAULT 0\n#endif\n"
+                  "#ifndef SETTING_VTX_BAND_DEFAULT\n#define SETTING_VTX_BAND_DEFAULT 0\n#endif\n"
+                  "#ifndef SETTING_VTX_CHANNEL_DEFAULT\n#define SETTING_VTX_CHANNEL_DEFAULT 0\n#endif\n"
+              ),
           ]
 
           for file, marker, defs in patches:
@@ -407,10 +406,13 @@ jobs:
               if not p.exists():
                   print("SKIP missing", file)
                   continue
+
               s = p.read_text()
+
               if marker not in s:
                   s = s.replace("#include", f"/* {marker} */\n{defs}\n#include", 1)
                   p.write_text(s)
+
               print("patched", file)
           PY
 
@@ -422,7 +424,7 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build all RUNA v41 LITE FIX2 maps
+      - name: Build all RUNA v41 LITE FIX3 maps
         run: |
           cd inav/build
 
@@ -458,8 +460,8 @@ jobs:
           echo "===== OUT ====="
           ls -lh out
 
-      - name: Upload v41 LITE FIX2 map pack
+      - name: Upload v41 LITE FIX3 map pack
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_V41_LITE_FIX2_LSM6DXX_AXIS_MAP_PACK
+          name: RUNA_V41_LITE_FIX3_LSM6DXX_AXIS_MAP_PACK
           path: out/*
