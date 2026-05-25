@@ -1,4 +1,4 @@
-name: RUNA v41 LITE LSM6DXX AXIS MAP PACK
+name: RUNA v41 LITE FIX2 LSM6DXX AXIS MAP PACK
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
           sudo apt-get install -y build-essential cmake git gcc-arm-none-eabi binutils-arm-none-eabi
           which arm-none-eabi-objcopy || true
 
-      - name: Patch LSM6DXX driver for RUNA v41 LITE axis maps
+      - name: Patch LSM6DXX driver for RUNA v41 LITE FIX2 axis maps
         run: |
           cd inav
 
@@ -34,7 +34,7 @@ jobs:
                   "#define LSM6DS3_CHIP_ID 0x69",
                   "#define LSM6DS3_CHIP_ID 0x69\n"
                   "\n"
-                  "/* RUNA v41 LITE: allow LSM6DSV16X / 0x70 as LSM6DXX */\n"
+                  "/* RUNA v41 LITE FIX2: allow LSM6DSV16X / 0x70 as LSM6DXX */\n"
                   "#define RUNA_LSM6DSV16X_CHIP_ID 0x70\n"
               )
 
@@ -54,15 +54,15 @@ jobs:
           old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
 
           new_scale = (
-              "// RUNA_GYRO_SCALE_V41_LITE\n"
+              "// RUNA_GYRO_SCALE_V41_LITE_FIX2\n"
               "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-              "        gyro->scale = 1.0f / (16.4f * 4.0f); // RUNA v41 LITE scale /4\n"
+              "        gyro->scale = 1.0f / (16.4f * 4.0f); // RUNA v41 LITE FIX2 scale /4\n"
               "    } else {\n"
               "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
               "    }"
           )
 
-          if "RUNA_GYRO_SCALE_V41_LITE" not in s:
+          if "RUNA_GYRO_SCALE_V41_LITE_FIX2" not in s:
               if old_scale_1 in s:
                   s = s.replace(old_scale_1, new_scale, 1)
               elif old_scale_2 in s:
@@ -70,7 +70,7 @@ jobs:
               else:
                   print("WARNING: gyro scale line not found")
 
-          if "RUNA_ACC_AXIS_MAP_V41_LITE" not in s:
+          if "RUNA_ACC_AXIS_MAP_V41_LITE_FIX2" not in s:
               acc_old = (
                   "    acc->ADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
                   "    acc->ADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
@@ -78,7 +78,7 @@ jobs:
               )
 
               acc_new = (
-                  "    // RUNA_ACC_AXIS_MAP_V41_LITE\n"
+                  "    // RUNA_ACC_AXIS_MAP_V41_LITE_FIX2\n"
                   "    const float runaAccOldX = (float) int16_val_little_endian(data, 0);\n"
                   "    const float runaAccOldY = (float) int16_val_little_endian(data, 1);\n"
                   "    const float runaAccOldZ = (float) int16_val_little_endian(data, 2);\n"
@@ -119,7 +119,7 @@ jobs:
               else:
                   print("WARNING: ACC block not found")
 
-          if "RUNA_GYRO_AXIS_MAP_V41_LITE" not in s:
+          if "RUNA_GYRO_AXIS_MAP_V41_LITE_FIX2" not in s:
               gyro_old = (
                   "    gyro->gyroADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
                   "    gyro->gyroADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
@@ -127,7 +127,7 @@ jobs:
               )
 
               gyro_new = (
-                  "    // RUNA_GYRO_AXIS_MAP_V41_LITE\n"
+                  "    // RUNA_GYRO_AXIS_MAP_V41_LITE_FIX2\n"
                   "    const float runaGyroOldX = (float) int16_val_little_endian(data, 0);\n"
                   "    const float runaGyroOldY = (float) int16_val_little_endian(data, 1);\n"
                   "    const float runaGyroOldZ = (float) int16_val_little_endian(data, 2);\n"
@@ -171,9 +171,9 @@ jobs:
           p.write_text(s)
           PY
 
-          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE_V41_LITE|RUNA_ACC_AXIS_MAP_V41_LITE|RUNA_GYRO_AXIS_MAP_V41_LITE|RUNA_AXIS_MAP" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
+          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE_V41_LITE_FIX2|RUNA_ACC_AXIS_MAP_V41_LITE_FIX2|RUNA_GYRO_AXIS_MAP_V41_LITE_FIX2|RUNA_AXIS_MAP" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
 
-      - name: Create RUNA v41 LITE map targets
+      - name: Create RUNA v41 LITE FIX2 map targets
         run: |
           cd inav
 
@@ -194,59 +194,17 @@ jobs:
             sed -i '/TARGET_BOARD_IDENTIFIER/d' "src/main/target/$T/target.h" || true
             sed -i '/USBD_PRODUCT_STRING/d' "src/main/target/$T/target.h" || true
 
-            sed -i '/MPU6000/d' "src/main/target/$T/target.h" || true
-            sed -i '/ICM42605/d' "src/main/target/$T/target.h" || true
-            sed -i '/ICM42688/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_IMU_MPU/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_IMU_ICM/d' "src/main/target/$T/target.h" || true
-            sed -i '/IMU_MPU/d' "src/main/target/$T/target.h" || true
-            sed -i '/IMU_ICM/d' "src/main/target/$T/target.h" || true
-            sed -i '/MPU6000_CS_PIN/d' "src/main/target/$T/target.h" || true
-            sed -i '/MPU6000_SPI_BUS/d' "src/main/target/$T/target.h" || true
-            sed -i '/ICM42605_CS_PIN/d' "src/main/target/$T/target.h" || true
-            sed -i '/ICM42605_SPI_BUS/d' "src/main/target/$T/target.h" || true
-
-            sed -i '/USE_GYRO/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_ACC/d' "src/main/target/$T/target.h" || true
-            sed -i '/GYRO_/d' "src/main/target/$T/target.h" || true
-            sed -i '/ACC_/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_IMU_LSM/d' "src/main/target/$T/target.h" || true
-            sed -i '/IMU_LSM/d' "src/main/target/$T/target.h" || true
-            sed -i '/LSM6/d' "src/main/target/$T/target.h" || true
-
-            sed -i '/USE_BARO/d' "src/main/target/$T/target.h" || true
-            sed -i '/BARO_/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_MAG/d' "src/main/target/$T/target.h" || true
-            sed -i '/MAG_/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_MAX7456/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_AT7456E/d' "src/main/target/$T/target.h" || true
-            sed -i '/MAX7456/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_SDCARD/d' "src/main/target/$T/target.h" || true
-            sed -i '/SDCARD/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_FLASHFS/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_FLASH_M25P16/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_BLACKBOX/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_VTX/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_LED_STRIP/d' "src/main/target/$T/target.h" || true
-            sed -i '/LED_STRIP/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_PINIO/d' "src/main/target/$T/target.h" || true
-            sed -i '/PINIO/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_RANGEFINDER/d' "src/main/target/$T/target.h" || true
-            sed -i '/RANGEFINDER/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_OPFLOW/d' "src/main/target/$T/target.h" || true
-            sed -i '/OPFLOW/d' "src/main/target/$T/target.h" || true
-            sed -i '/USE_PITOT/d' "src/main/target/$T/target.h" || true
-            sed -i '/PITOT/d' "src/main/target/$T/target.h" || true
-            sed -i '/AIRSPEED/d' "src/main/target/$T/target.h" || true
-
             cat >> "src/main/target/$T/target.h" <<EOF
 
           /*
            * $T
-           * RUNA v41 LITE axis map test
+           * RUNA v41 LITE FIX2 axis map test
            * Base: MATEKF405SE pinout + LSM6DXX 0x70 patch
            * $MAP_DEFINE
-           * LITE: no OSD, no SD, no BARO, no MAG, no VTX.
+           *
+           * ВАЖНО:
+           * Не удаляем строки из target.h через sed, чтобы не ломать #if/#endif.
+           * Всё отключаем только через #undef в конце файла.
            */
 
           #undef TARGET_BOARD_IDENTIFIER
@@ -256,6 +214,35 @@ jobs:
           #define USBD_PRODUCT_STRING "$T"
 
           #define $MAP_DEFINE
+
+          /* ---------- FORCE ONLY LSM6DXX IMU ---------- */
+
+          #undef USE_IMU_MPU6000
+          #undef USE_IMU_MPU6500
+          #undef USE_IMU_MPU9250
+          #undef USE_IMU_ICM20689
+          #undef USE_IMU_ICM42605
+          #undef USE_IMU_ICM42688
+          #undef USE_IMU_ICM42688P
+          #undef USE_IMU_BMI160
+          #undef USE_IMU_BMI088
+          #undef USE_IMU_BMI270
+
+          #undef MPU6000_CS_PIN
+          #undef MPU6000_SPI_BUS
+          #undef MPU6500_CS_PIN
+          #undef MPU6500_SPI_BUS
+          #undef ICM42605_CS_PIN
+          #undef ICM42605_SPI_BUS
+          #undef ICM42688_CS_PIN
+          #undef ICM42688_SPI_BUS
+
+          #define USE_IMU_LSM6DXX
+          #define IMU_LSM6DXX_ALIGN CW0_DEG
+          #define LSM6DXX_CS_PIN PA4
+          #define LSM6DXX_SPI_BUS BUS_SPI1
+
+          /* ---------- SPI1 FOR IMU ---------- */
 
           #define USE_SPI
           #define USE_SPI_DEVICE_1
@@ -272,23 +259,53 @@ jobs:
           #undef SPI1_MOSI_PIN
           #define SPI1_MOSI_PIN PA7
 
-          #define USE_IMU_LSM6DXX
-          #define IMU_LSM6DXX_ALIGN CW0_DEG
-          #define LSM6DXX_CS_PIN SPI1_NSS_PIN
-          #define LSM6DXX_SPI_BUS BUS_SPI1
+          /* ---------- LITE SIZE CUTS ---------- */
 
           #undef USE_OSD
+          #undef USE_OSD_SD
+          #undef USE_OSD_HD
+          #undef USE_OSD_QUICK_MENU
           #undef USE_OSD_CUSTOM_ELEMENTS
+          #undef USE_OSD_CUSTOM_ELEMENTS_STATS
+          #undef USE_OSD_CUSTOM_ELEMENTS_SCRIPT
+          #undef USE_OSD_PROFILES
           #undef USE_OSD_SYMBOLS
+          #undef USE_CUSTOM_BOX_NAMES
+
           #undef USE_MAX7456
           #undef USE_AT7456E
+          #undef MAX7456_SPI_BUS
+          #undef MAX7456_CS_PIN
 
           #undef USE_SDCARD
+          #undef USE_SDCARD_SPI
+          #undef SDCARD_SPI_BUS
+          #undef SDCARD_CS_PIN
+
           #undef USE_BLACKBOX
           #undef USE_FLASHFS
+          #undef USE_FLASH_M25P16
 
           #undef USE_BARO
+          #undef USE_BARO_BMP085
+          #undef USE_BARO_BMP280
+          #undef USE_BARO_BMP388
+          #undef USE_BARO_MS5611
+          #undef USE_BARO_SPL06
+          #undef BARO_I2C_BUS
+          #undef BARO_SPI_BUS
+          #undef BARO_CS_PIN
+
           #undef USE_MAG
+          #undef USE_MAG_HMC5883
+          #undef USE_MAG_QMC5883
+          #undef USE_MAG_LIS3MDL
+          #undef USE_MAG_MPU9250
+          #undef USE_MAG_IST8310
+          #undef USE_MAG_IST8308
+          #undef MAG_I2C_BUS
+          #undef MAG_SPI_BUS
+          #undef MAG_CS_PIN
 
           #undef USE_VTX_COMMON
           #undef USE_VTX_SMARTAUDIO
@@ -297,13 +314,44 @@ jobs:
           #undef USE_VTX_TABLE
 
           #undef USE_LED_STRIP
+          #undef USE_LED_STRIP_STATUS_MODE
+          #undef USE_LED_STRIP_RGB
+          #undef USE_LED_STRIP_GRB
+          #undef LED_STRIP_PIN
+
           #undef USE_PINIO
           #undef USE_PINIOBOX
+          #undef PINIO1_PIN
+          #undef PINIO2_PIN
+          #undef PINIO3_PIN
+          #undef PINIO4_PIN
 
           #undef USE_RANGEFINDER
+          #undef USE_RANGEFINDER_HCSR04
+          #undef USE_RANGEFINDER_SRF10
+          #undef USE_RANGEFINDER_VL53L0X
+          #undef USE_RANGEFINDER_VL53L1X
+          #undef RANGEFINDER_I2C_BUS
+
           #undef USE_OPFLOW
+          #undef USE_OPFLOW_CXOF
+          #undef USE_OPFLOW_MSP
+          #undef USE_OPFLOW_FAKE
+
           #undef USE_PITOT
           #undef USE_PITOT_VIRTUAL
+          #undef USE_PITOT_MS4525
+          #undef USE_PITOT_DLVR
+          #undef USE_PITOT_ADC
+          #undef PITOT_I2C_BUS
+          #undef PITOT_ADC_CHANNEL
+
+          #undef USE_GEOZONE
+          #undef USE_SAFE_HOME
+          #undef USE_FW_AUTOLAND
+          #undef USE_NAV_FW_LAUNCH
+          #undef USE_NAV_FW_AUTOLAND
+          #undef USE_WIND_ESTIMATOR
 
           EOF
 
@@ -318,7 +366,7 @@ jobs:
           create_target RUNA_V41_LITE_MAP_E RUNA_AXIS_MAP_E
           create_target RUNA_V41_LITE_MAP_F RUNA_AXIS_MAP_F
 
-      - name: Patch OSD/VTX/Blackbox stubs for LITE build
+      - name: Patch OSD VTX Blackbox stubs for LITE build
         run: |
           cd inav
 
@@ -374,7 +422,7 @@ jobs:
           cd build
           cmake ..
 
-      - name: Build all RUNA v41 LITE maps
+      - name: Build all RUNA v41 LITE FIX2 maps
         run: |
           cd inav/build
 
@@ -410,8 +458,8 @@ jobs:
           echo "===== OUT ====="
           ls -lh out
 
-      - name: Upload v41 LITE map pack
+      - name: Upload v41 LITE FIX2 map pack
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_V41_LITE_LSM6DXX_AXIS_MAP_PACK
+          name: RUNA_V41_LITE_FIX2_LSM6DXX_AXIS_MAP_PACK
           path: out/*
