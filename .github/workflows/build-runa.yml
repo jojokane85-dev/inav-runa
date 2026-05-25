@@ -1,467 +1,241 @@
-name: RUNA v41 LITE FIX3 LSM6DXX AXIS MAP PACK
+name: Build RUNA FC 5.1 Custom
 
 on:
   workflow_dispatch:
-  push:
+    inputs:
+      target:
+        description: "FC target"
+        required: true
+        default: "SPEEDYBEEF405WING"
+      runa_name:
+        description: "RUNA name, must be same length or shorter than target"
+        required: true
+        default: "RUNA_FC51_F405WG"
+      inav_ref:
+        description: "INAV branch/tag"
+        required: true
+        default: "master"
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  build-runa:
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout INAV 8.0.1
+      - name: Install dependencies
         run: |
-          git clone --recursive --branch 8.0.1 https://github.com/iNavFlight/inav.git inav
+          sudo apt update
+          sudo apt install -y \
+            git \
+            make \
+            cmake \
+            ninja-build \
+            gcc-arm-none-eabi \
+            binutils-arm-none-eabi \
+            python3 \
+            python3-pip \
+            curl \
+            unzip
 
-      - name: Install tools
+      - name: Clone INAV
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake git gcc-arm-none-eabi binutils-arm-none-eabi
-          which arm-none-eabi-objcopy || true
-
-      - name: Patch LSM6DXX driver for RUNA v41 LITE FIX3 axis maps
-        run: |
+          git clone --recursive https://github.com/iNavFlight/inav.git inav
           cd inav
+          git checkout "${{ github.event.inputs.inav_ref }}"
+          git submodule update --init --recursive
 
-          python3 <<'PY'
+      - name: Create RUNA patch script
+        run: |
+          mkdir -p scripts
+
+          cat > scripts/patch_runa_name.py <<'PY'
+          #!/usr/bin/env python3
+          import argparse
           from pathlib import Path
 
-          p = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
-          s = p.read_text()
+          def patch_file(path: Path, old: bytes, new: bytes) -> bool:
+              data = path.read_bytes()
 
-          if "RUNA_LSM6DSV16X_CHIP_ID" not in s:
-              s = s.replace(
-                  "#define LSM6DS3_CHIP_ID 0x69",
-                  "#define LSM6DS3_CHIP_ID 0x69\n"
-                  "\n"
-                  "/* RUNA v41 LITE FIX3: allow LSM6DSV16X / 0x70 as LSM6DXX */\n"
-                  "#define RUNA_LSM6DSV16X_CHIP_ID 0x70\n"
-              )
+              if old not in data:
+                  print(f"[SKIP] {path.name}: target name not found")
+                  return False
 
-          if "case RUNA_LSM6DSV16X_CHIP_ID:" not in s:
-              if "case LSM6DSL_CHIP_ID:" in s:
-                  s = s.replace(
-                      "case LSM6DSL_CHIP_ID:",
-                      "case LSM6DSL_CHIP_ID:\n            case RUNA_LSM6DSV16X_CHIP_ID:"
-                  )
-              elif "case LSM6DSO_CHIP_ID:" in s:
-                  s = s.replace(
-                      "case LSM6DSO_CHIP_ID:",
-                      "case LSM6DSO_CHIP_ID:\n            case RUNA_LSM6DSV16X_CHIP_ID:"
+              if len(new) > len(old):
+                  raise ValueError(
+                      f"RUNA name too long: {new.decode()} "
+                      f"({len(new)}) > {old.decode()} ({len(old)})"
                   )
 
-          old_scale_1 = "gyro->scale = 1.0f / 16.4f; // 2000 dps"
-          old_scale_2 = "gyro->scale = 1.0f / 16.4f;"
+              new_padded = new + b"\x00" * (len(old) - len(new))
+              patched = data.replace(old, new_padded)
+              path.write_bytes(patched)
 
-          new_scale = (
-              "// RUNA_GYRO_SCALE_V41_LITE_FIX3\n"
-              "    if (lsm6dID == RUNA_LSM6DSV16X_CHIP_ID) {\n"
-              "        gyro->scale = 1.0f / (16.4f * 4.0f); // RUNA v41 LITE FIX3 scale /4\n"
-              "    } else {\n"
-              "        gyro->scale = 1.0f / 16.4f; // 2000 dps\n"
-              "    }"
-          )
+              print(f"[OK] {path.name}: {old!r} -> {new_padded!r}")
+              return True
 
-          if "RUNA_GYRO_SCALE_V41_LITE_FIX3" not in s:
-              if old_scale_1 in s:
-                  s = s.replace(old_scale_1, new_scale, 1)
-              elif old_scale_2 in s:
-                  s = s.replace(old_scale_2, new_scale, 1)
-              else:
-                  print("WARNING: gyro scale line not found")
+          def main():
+              parser = argparse.ArgumentParser()
+              parser.add_argument("--folder", required=True)
+              parser.add_argument("--old", required=True)
+              parser.add_argument("--new", required=True)
+              args = parser.parse_args()
 
-          if "RUNA_ACC_AXIS_MAP_V41_LITE_FIX3" not in s:
-              acc_old = (
-                  "    acc->ADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
-                  "    acc->ADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
-                  "    acc->ADCRaw[Z] = (float) int16_val_little_endian(data, 2);"
-              )
+              folder = Path(args.folder)
+              old = args.old.encode("ascii")
+              new = args.new.encode("ascii")
 
-              acc_new = (
-                  "    // RUNA_ACC_AXIS_MAP_V41_LITE_FIX3\n"
-                  "    const float runaAccOldX = (float) int16_val_little_endian(data, 0);\n"
-                  "    const float runaAccOldY = (float) int16_val_little_endian(data, 1);\n"
-                  "    const float runaAccOldZ = (float) int16_val_little_endian(data, 2);\n"
-                  "\n"
-                  "#if defined(RUNA_AXIS_MAP_A)\n"
-                  "    acc->ADCRaw[X] = -runaAccOldY;\n"
-                  "    acc->ADCRaw[Y] =  runaAccOldX;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_B)\n"
-                  "    acc->ADCRaw[X] =  runaAccOldY;\n"
-                  "    acc->ADCRaw[Y] = -runaAccOldX;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_C)\n"
-                  "    acc->ADCRaw[X] =  runaAccOldY;\n"
-                  "    acc->ADCRaw[Y] =  runaAccOldX;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_D)\n"
-                  "    acc->ADCRaw[X] = -runaAccOldY;\n"
-                  "    acc->ADCRaw[Y] = -runaAccOldX;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_E)\n"
-                  "    acc->ADCRaw[X] =  runaAccOldX;\n"
-                  "    acc->ADCRaw[Y] = -runaAccOldY;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_F)\n"
-                  "    acc->ADCRaw[X] = -runaAccOldX;\n"
-                  "    acc->ADCRaw[Y] =  runaAccOldY;\n"
-                  "    acc->ADCRaw[Z] =  runaAccOldZ;\n"
-                  "#else\n"
-                  "    acc->ADCRaw[X] = runaAccOldX;\n"
-                  "    acc->ADCRaw[Y] = runaAccOldY;\n"
-                  "    acc->ADCRaw[Z] = runaAccOldZ;\n"
-                  "#endif"
-              )
+              files = []
+              for pattern in ("*.hex", "*.bin", "*.elf"):
+                  files.extend(folder.rglob(pattern))
 
-              if acc_old in s:
-                  s = s.replace(acc_old, acc_new, 1)
-              else:
-                  print("WARNING: ACC block not found")
+              if not files:
+                  raise RuntimeError("No firmware files found")
 
-          if "RUNA_GYRO_AXIS_MAP_V41_LITE_FIX3" not in s:
-              gyro_old = (
-                  "    gyro->gyroADCRaw[X] = (float) int16_val_little_endian(data, 0);\n"
-                  "    gyro->gyroADCRaw[Y] = (float) int16_val_little_endian(data, 1);\n"
-                  "    gyro->gyroADCRaw[Z] = (float) int16_val_little_endian(data, 2);"
-              )
+              count = 0
+              for f in files:
+                  try:
+                      if patch_file(f, old, new):
+                          count += 1
+                  except Exception as e:
+                      print(f"[ERROR] {f}: {e}")
 
-              gyro_new = (
-                  "    // RUNA_GYRO_AXIS_MAP_V41_LITE_FIX3\n"
-                  "    const float runaGyroOldX = (float) int16_val_little_endian(data, 0);\n"
-                  "    const float runaGyroOldY = (float) int16_val_little_endian(data, 1);\n"
-                  "    const float runaGyroOldZ = (float) int16_val_little_endian(data, 2);\n"
-                  "\n"
-                  "#if defined(RUNA_AXIS_MAP_A)\n"
-                  "    gyro->gyroADCRaw[X] = -runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Y] =  runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_B)\n"
-                  "    gyro->gyroADCRaw[X] =  runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Y] = -runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_C)\n"
-                  "    gyro->gyroADCRaw[X] =  runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Y] =  runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_D)\n"
-                  "    gyro->gyroADCRaw[X] = -runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Y] = -runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_E)\n"
-                  "    gyro->gyroADCRaw[X] =  runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Y] = -runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#elif defined(RUNA_AXIS_MAP_F)\n"
-                  "    gyro->gyroADCRaw[X] = -runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Y] =  runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Z] =  runaGyroOldZ;\n"
-                  "#else\n"
-                  "    gyro->gyroADCRaw[X] = runaGyroOldX;\n"
-                  "    gyro->gyroADCRaw[Y] = runaGyroOldY;\n"
-                  "    gyro->gyroADCRaw[Z] = runaGyroOldZ;\n"
-                  "#endif"
-              )
+              print(f"Patched files: {count}")
 
-              if gyro_old in s:
-                  s = s.replace(gyro_old, gyro_new, 1)
-              else:
-                  print("WARNING: GYRO block not found")
-
-          p.write_text(s)
+          if __name__ == "__main__":
+              main()
           PY
 
-          grep -nE "RUNA_LSM6DSV16X|RUNA_GYRO_SCALE_V41_LITE_FIX3|RUNA_ACC_AXIS_MAP_V41_LITE_FIX3|RUNA_GYRO_AXIS_MAP_V41_LITE_FIX3|RUNA_AXIS_MAP" src/main/drivers/accgyro/accgyro_lsm6dxx.c || true
-
-      - name: Create RUNA v41 LITE FIX3 map targets
+      - name: Create RUNA CLI files
         run: |
-          cd inav
+          mkdir -p cli
 
-          create_target () {
-            T="$1"
-            MAP_DEFINE="$2"
+          cat > cli/RUNA_FC51_VTX_5G8.cli <<'CLI'
+          # RUNA FC 5.1 VTX 5.8
+          # Частоты RUNA: 5820 / 5695 / 5733
 
-            echo "===== Create $T with $MAP_DEFINE ====="
+          set vtx_band = 5
+          set vtx_channel = 3
+          set vtx_freq = 5733
+          set vtx_power = 5
 
-            rm -rf "src/main/target/$T"
-            mkdir -p "src/main/target/$T"
-            cp -r src/main/target/MATEKF405SE/* "src/main/target/$T/"
+          save
+          CLI
 
-            cat > "src/main/target/$T/CMakeLists.txt" <<EOF
-          target_stm32f405xg($T)
-          EOF
+          cat > cli/RUNA_FC51_VTX_3G3.cli <<'CLI'
+          # RUNA FC 5.1 VTX 3.3
+          # Только если VTX реально поддерживает 3.3 GHz
 
-            sed -i '/TARGET_BOARD_IDENTIFIER/d' "src/main/target/$T/target.h" || true
-            sed -i '/USBD_PRODUCT_STRING/d' "src/main/target/$T/target.h" || true
+          set vtx_band = 1
+          set vtx_channel = 1
+          set vtx_freq = 3300
+          set vtx_power = 5
 
-            cat >> "src/main/target/$T/target.h" <<EOF
+          save
+          CLI
 
-          /*
-           * $T
-           * RUNA v41 LITE FIX3 axis map test
-           * Base: MATEKF405SE pinout + LSM6DXX 0x70 patch
-           * $MAP_DEFINE
-           */
+          cat > cli/RUNA_FC51_SHUTTER_ARM_DISARM.cli <<'CLI'
+          # RUNA FC 5.1
+          # ШТОРА + VTX POWER ARM/DISARM
 
-          #undef TARGET_BOARD_IDENTIFIER
-          #define TARGET_BOARD_IDENTIFIER "RUNA"
+          # DISARM -> low power / power 1
+          # ARM    -> vtx_power 5
 
-          #undef USBD_PRODUCT_STRING
-          #define USBD_PRODUCT_STRING "$T"
+          set vtx_power = 5
+          set vtx_low_power_disarm = ON
 
-          #define $MAP_DEFINE
+          # ШТОРА:
+          # В INAV Configurator:
+          #
+          # OSD Layout 0 = обычный экран
+          # OSD Layout 1 = шторка
+          #
+          # CH8 / AUX4:
+          # LOW/MID 900-1666  = Layout 0
+          # HIGH    1667-2100 = Layout 1 / ШТОРА
 
-          #undef USE_IMU_MPU6000
-          #undef USE_IMU_MPU6500
-          #undef USE_IMU_MPU9250
-          #undef USE_IMU_ICM20689
-          #undef USE_IMU_ICM42605
-          #undef USE_IMU_ICM42688
-          #undef USE_IMU_ICM42688P
-          #undef USE_IMU_BMI160
-          #undef USE_IMU_BMI088
-          #undef USE_IMU_BMI270
+          save
+          CLI
 
-          #undef MPU6000_CS_PIN
-          #undef MPU6000_SPI_BUS
-          #undef MPU6500_CS_PIN
-          #undef MPU6500_SPI_BUS
-          #undef ICM42605_CS_PIN
-          #undef ICM42605_SPI_BUS
-          #undef ICM42688_CS_PIN
-          #undef ICM42688_SPI_BUS
+          cat > cli/RUNA_FC51_ALL_IN_ONE.cli <<'CLI'
+          # RUNA FC 5.1 ALL IN ONE
+          # Безопасный CLI: не трогает оси, UART, моторы, сервы и mixer
 
-          #define USE_IMU_LSM6DXX
-          #define IMU_LSM6DXX_ALIGN CW0_DEG
-          #define LSM6DXX_CS_PIN PA4
-          #define LSM6DXX_SPI_BUS BUS_SPI1
+          # VTX 5.8 default
+          set vtx_band = 5
+          set vtx_channel = 3
+          set vtx_freq = 5733
+          set vtx_power = 5
 
-          #define USE_SPI
-          #define USE_SPI_DEVICE_1
+          # DISARM -> low power
+          # ARM -> power 5
+          set vtx_low_power_disarm = ON
 
-          #undef SPI1_NSS_PIN
-          #define SPI1_NSS_PIN PA4
+          # ШТОРА:
+          # OSD Layout 0 = обычный экран
+          # OSD Layout 1 = шторка
+          # CH8/AUX4 HIGH = шторка
 
-          #undef SPI1_SCK_PIN
-          #define SPI1_SCK_PIN PA5
+          save
+          CLI
 
-          #undef SPI1_MISO_PIN
-          #define SPI1_MISO_PIN PA6
-
-          #undef SPI1_MOSI_PIN
-          #define SPI1_MOSI_PIN PA7
-
-          #undef USE_OSD
-          #undef USE_OSD_SD
-          #undef USE_OSD_HD
-          #undef USE_OSD_QUICK_MENU
-          #undef USE_OSD_CUSTOM_ELEMENTS
-          #undef USE_OSD_CUSTOM_ELEMENTS_STATS
-          #undef USE_OSD_CUSTOM_ELEMENTS_SCRIPT
-          #undef USE_OSD_PROFILES
-          #undef USE_OSD_SYMBOLS
-          #undef USE_CUSTOM_BOX_NAMES
-
-          #undef USE_MAX7456
-          #undef USE_AT7456E
-          #undef MAX7456_SPI_BUS
-          #undef MAX7456_CS_PIN
-
-          #undef USE_SDCARD
-          #undef USE_SDCARD_SPI
-          #undef SDCARD_SPI_BUS
-          #undef SDCARD_CS_PIN
-
-          #undef USE_BLACKBOX
-          #undef USE_FLASHFS
-          #undef USE_FLASH_M25P16
-
-          #undef USE_BARO
-          #undef USE_BARO_BMP085
-          #undef USE_BARO_BMP280
-          #undef USE_BARO_BMP388
-          #undef USE_BARO_MS5611
-          #undef USE_BARO_SPL06
-          #undef BARO_I2C_BUS
-          #undef BARO_SPI_BUS
-          #undef BARO_CS_PIN
-
-          #undef USE_MAG
-          #undef USE_MAG_HMC5883
-          #undef USE_MAG_QMC5883
-          #undef USE_MAG_LIS3MDL
-          #undef USE_MAG_MPU9250
-          #undef USE_MAG_IST8310
-          #undef USE_MAG_IST8308
-          #undef MAG_I2C_BUS
-          #undef MAG_SPI_BUS
-          #undef MAG_CS_PIN
-
-          #undef USE_VTX_COMMON
-          #undef USE_VTX_SMARTAUDIO
-          #undef USE_VTX_TRAMP
-          #undef USE_VTX_MSP
-          #undef USE_VTX_TABLE
-
-          #undef USE_LED_STRIP
-          #undef USE_LED_STRIP_STATUS_MODE
-          #undef USE_LED_STRIP_RGB
-          #undef USE_LED_STRIP_GRB
-          #undef LED_STRIP_PIN
-
-          #undef USE_PINIO
-          #undef USE_PINIOBOX
-          #undef PINIO1_PIN
-          #undef PINIO2_PIN
-          #undef PINIO3_PIN
-          #undef PINIO4_PIN
-
-          #undef USE_RANGEFINDER
-          #undef USE_RANGEFINDER_HCSR04
-          #undef USE_RANGEFINDER_SRF10
-          #undef USE_RANGEFINDER_VL53L0X
-          #undef USE_RANGEFINDER_VL53L1X
-          #undef RANGEFINDER_I2C_BUS
-
-          #undef USE_OPFLOW
-          #undef USE_OPFLOW_CXOF
-          #undef USE_OPFLOW_MSP
-          #undef USE_OPFLOW_FAKE
-
-          #undef USE_PITOT
-          #undef USE_PITOT_VIRTUAL
-          #undef USE_PITOT_MS4525
-          #undef USE_PITOT_DLVR
-          #undef USE_PITOT_ADC
-          #undef PITOT_I2C_BUS
-          #undef PITOT_ADC_CHANNEL
-
-          #undef USE_GEOZONE
-          #undef USE_SAFE_HOME
-          #undef USE_FW_AUTOLAND
-          #undef USE_NAV_FW_LAUNCH
-          #undef USE_NAV_FW_AUTOLAND
-          #undef USE_WIND_ESTIMATOR
-
-          EOF
-
-            echo "===== $T check ====="
-            grep -nE "USBD_PRODUCT_STRING|RUNA_AXIS_MAP|LSM6DXX|IMU_LSM6DXX_ALIGN|USE_BARO|USE_MAG|USE_MAX7456|USE_SDCARD|USE_BLACKBOX|USE_VTX" "src/main/target/$T/target.h" || true
-          }
-
-          create_target RUNA_V41_LITE_MAP_A RUNA_AXIS_MAP_A
-          create_target RUNA_V41_LITE_MAP_B RUNA_AXIS_MAP_B
-          create_target RUNA_V41_LITE_MAP_C RUNA_AXIS_MAP_C
-          create_target RUNA_V41_LITE_MAP_D RUNA_AXIS_MAP_D
-          create_target RUNA_V41_LITE_MAP_E RUNA_AXIS_MAP_E
-          create_target RUNA_V41_LITE_MAP_F RUNA_AXIS_MAP_F
-
-      - name: Patch OSD VTX Blackbox stubs for LITE build
+      - name: Build INAV firmware
         run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          patches = [
-              (
-                  "src/main/io/osd/custom_elements.c",
-                  "RUNA_LITE_SYM_BLANK_FIX",
-                  "#ifndef SYM_BLANK\n#define SYM_BLANK 0\n#endif\n"
-              ),
-              (
-                  "src/main/programming/logic_condition.c",
-                  "RUNA_LITE_VTX_SETTINGS_FIX",
-                  "#ifndef VTX_SETTINGS_MIN_POWER\n#define VTX_SETTINGS_MIN_POWER 0\n#endif\n"
-                  "#ifndef VTX_SETTINGS_POWER_COUNT\n#define VTX_SETTINGS_POWER_COUNT 1\n#endif\n"
-                  "#ifndef VTX_SETTINGS_BAND_COUNT\n#define VTX_SETTINGS_BAND_COUNT 1\n#endif\n"
-                  "#ifndef VTX_SETTINGS_CHANNEL_COUNT\n#define VTX_SETTINGS_CHANNEL_COUNT 1\n#endif\n"
-              ),
-              (
-                  "src/main/cms/cms_menu_blackbox.c",
-                  "RUNA_LITE_BLACKBOX_SETTING_FIX",
-                  "#ifndef SETTING_BLACKBOX_RATE_DENOM\n#define SETTING_BLACKBOX_RATE_DENOM 0\n#endif\n"
-              ),
-              (
-                  "src/main/cms/cms_menu_vtx.c",
-                  "RUNA_LITE_CMS_VTX_FIX",
-                  "#ifndef VTX_SETTINGS_MIN_POWER\n#define VTX_SETTINGS_MIN_POWER 0\n#endif\n"
-                  "#ifndef VTX_SETTINGS_POWER_COUNT\n#define VTX_SETTINGS_POWER_COUNT 1\n#endif\n"
-                  "#ifndef VTX_SETTINGS_BAND_COUNT\n#define VTX_SETTINGS_BAND_COUNT 1\n#endif\n"
-                  "#ifndef VTX_SETTINGS_CHANNEL_COUNT\n#define VTX_SETTINGS_CHANNEL_COUNT 1\n#endif\n"
-              ),
-              (
-                  "src/main/io/vtx.c",
-                  "RUNA_LITE_IO_VTX_FIX",
-                  "#ifndef SETTING_VTX_MAX_POWER_OVERRIDE_DEFAULT\n#define SETTING_VTX_MAX_POWER_OVERRIDE_DEFAULT 0\n#endif\n"
-                  "#ifndef SETTING_VTX_FREQUENCY_GROUP_DEFAULT\n#define SETTING_VTX_FREQUENCY_GROUP_DEFAULT 0\n#endif\n"
-                  "#ifndef SETTING_VTX_POWER_DEFAULT\n#define SETTING_VTX_POWER_DEFAULT 0\n#endif\n"
-                  "#ifndef SETTING_VTX_BAND_DEFAULT\n#define SETTING_VTX_BAND_DEFAULT 0\n#endif\n"
-                  "#ifndef SETTING_VTX_CHANNEL_DEFAULT\n#define SETTING_VTX_CHANNEL_DEFAULT 0\n#endif\n"
-              ),
-          ]
-
-          for file, marker, defs in patches:
-              p = Path(file)
-              if not p.exists():
-                  print("SKIP missing", file)
-                  continue
-
-              s = p.read_text()
-
-              if marker not in s:
-                  s = s.replace("#include", f"/* {marker} */\n{defs}\n#include", 1)
-                  p.write_text(s)
-
-              print("patched", file)
-          PY
-
-      - name: Configure
-        run: |
-          cd inav
-          rm -rf build
-          mkdir -p build
-          cd build
-          cmake ..
-
-      - name: Build all RUNA v41 LITE FIX3 maps
-        run: |
+          mkdir -p inav/build
           cd inav/build
+          cmake ..
+          make "${{ github.event.inputs.target }}" -j"$(nproc)"
 
-          for T in RUNA_V41_LITE_MAP_A RUNA_V41_LITE_MAP_B RUNA_V41_LITE_MAP_C RUNA_V41_LITE_MAP_D RUNA_V41_LITE_MAP_E RUNA_V41_LITE_MAP_F; do
-            echo "===== BUILD $T ====="
-            make "$T" -j$(nproc)
-          done
-
-      - name: Collect HEX BIN ELF
+      - name: Patch RUNA name
         run: |
-          mkdir -p out
+          python3 scripts/patch_runa_name.py \
+            --folder inav/build \
+            --old "${{ github.event.inputs.target }}" \
+            --new "${{ github.event.inputs.runa_name }}"
 
-          for T in RUNA_V41_LITE_MAP_A RUNA_V41_LITE_MAP_B RUNA_V41_LITE_MAP_C RUNA_V41_LITE_MAP_D RUNA_V41_LITE_MAP_E RUNA_V41_LITE_MAP_F; do
-            echo "===== COLLECT $T ====="
+      - name: Prepare artifact
+        run: |
+          mkdir -p artifact
+          mkdir -p artifact/cli
 
-            ELF=$(find inav/build -type f -name "${T}.elf" | head -n 1)
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -exec cp {} artifact/ \;
 
-            if [ -z "$ELF" ]; then
-              ELF=$(find inav/build -type f -name "*${T}*.elf" | head -n 1)
-            fi
+          cp cli/*.cli artifact/cli/
 
-            if [ -z "$ELF" ]; then
-              echo "ERROR: ELF not found for $T"
-              find inav/build -type f -name "*.elf" -print
-              exit 1
-            fi
+          cat > artifact/RUNA_INFO.txt <<EOF
+          RUNA FC 5.1 CUSTOM
 
-            cp "$ELF" "out/${T}.elf"
-            arm-none-eabi-objcopy -O ihex "$ELF" "out/${T}.hex"
-            arm-none-eabi-objcopy -O binary "$ELF" "out/${T}.bin"
-          done
+          Base target:
+          ${{ github.event.inputs.target }}
 
-          echo "===== OUT ====="
-          ls -lh out
+          RUNA name:
+          ${{ github.event.inputs.runa_name }}
 
-      - name: Upload v41 LITE FIX3 map pack
+          Functions:
+          - VTX 5.8
+          - VTX 3.3
+          - ШТОРА
+          - DISARM -> VTX low power / power 1
+          - ARM -> VTX power 5
+
+          After flashing:
+          1. Open INAV Configurator
+          2. Open CLI
+          3. Paste:
+             cli/RUNA_FC51_ALL_IN_ONE.cli
+
+          Or separately:
+          - cli/RUNA_FC51_VTX_5G8.cli
+          - cli/RUNA_FC51_VTX_3G3.cli
+          - cli/RUNA_FC51_SHUTTER_ARM_DISARM.cli
+
+          IMPORTANT:
+          This build does not touch gyro axes, UART, motors, servos or mixer.
+          EOF
+
+          echo "=== ARTIFACT FILES ==="
+          find artifact -type f -print
+
+      - name: Upload RUNA firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_V41_LITE_FIX3_LSM6DXX_AXIS_MAP_PACK
-          path: out/*
+          name: RUNA_FC51_CUSTOM_FIRMWARE
+          path: artifact/
