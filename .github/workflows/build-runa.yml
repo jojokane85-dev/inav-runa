@@ -1,4 +1,4 @@
-name: Build RUNA FC51
+name: Build RUNA FC51 SAFE
 
 on:
   workflow_dispatch:
@@ -10,9 +10,13 @@ jobs:
 
     env:
       INAV_VERSION: 7.1.2
-      BASE_TARGET: SPEEDYBEEF405WING
-      TARGET: RUNA_FC51
-      DISPLAY_NAME: RUNA_FC51
+      TARGET: SPEEDYBEEF405WING
+
+      # Длина одинаковая:
+      # SPEEDYBEEF405WING = 17
+      # SPEEDYBEE51+RUNA! = 17
+      OLD_TARGET_NAME: SPEEDYBEEF405WING
+      NEW_TARGET_NAME: SPEEDYBEE51+RUNA!
 
     steps:
       - name: Install deps
@@ -56,96 +60,10 @@ jobs:
 
           test -d inav || exit 1
           cd inav
+          echo "Commit:"
           git rev-parse HEAD
 
-      - name: Create RUNA_FC51 target from SPEEDYBEEF405WING
-        run: |
-          cd inav
-
-          rm -rf src/main/target/${TARGET}
-          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
-
-          if [ -f "src/main/target/${TARGET}/CMakeLists.txt" ]; then
-            sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
-          fi
-
-          echo "Created ${TARGET} from ${BASE_TARGET}"
-          ls -la src/main/target/${TARGET}
-
-      - name: Patch RUNA FC51 target metadata
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import os
-          import re
-
-          target = os.environ["TARGET"]
-          display_name = os.environ["DISPLAY_NAME"]
-
-          target_dir = Path(f"src/main/target/{target}")
-          target_h = target_dir / "target.h"
-
-          text = target_h.read_text(encoding="utf-8")
-
-          # Не ломаем железо SPEEDYBEEF405WING.
-          # FC 5.1 по dump работает как SPEEDYBEEF405WING + ICM42605 + SPL06 + HMC5883.
-          # Поэтому пины гиры/баро/OSD оставляем от базового target.
-
-          # Меняем только видимые строки, если они есть.
-          replacements = {
-              "SPEEDYBEEF405WING": target,
-              "SpeedyBee F405 Wing": "RUNA FC51",
-              "SPEEDYBEE F405 WING": "RUNA FC51",
-          }
-
-          for old, new in replacements.items():
-              text = text.replace(old, new)
-
-          target_h.write_text(text, encoding="utf-8")
-
-          print("RUNA FC51 target metadata patched")
-          print("Checking important hardware strings:")
-          for pattern in ["ICM42605", "SPL06", "HMC5883", "QMC5883", "MAX7456", "AT7456", "SPI", "I2C"]:
-              if pattern in text:
-                  print("FOUND:", pattern)
-          PY
-
-          grep -n -E "ICM42605|SPL06|HMC|QMC|MAX7456|AT7456|SPI|I2C|RUNA|SPEEDY" src/main/target/${TARGET}/target.h || true
-
-      - name: Patch RUNA name in MSP
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-          import os
-
-          display_name = os.environ["DISPLAY_NAME"]
-
-          path = Path("src/main/fc/fc_msp.c")
-
-          if not path.exists():
-              print("WARNING: fc_msp.c not found")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8")
-
-          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
-
-          replacement = f'''const char *runaTargetName = "{display_name}";
-                  sbufWriteU8(dst, strlen(runaTargetName));
-                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));'''
-
-          text, count = re.subn(pattern, replacement, text, count=1)
-
-          path.write_text(text, encoding="utf-8")
-          print("MSP RUNA name patch count:", count)
-          PY
-
-      - name: Patch startup OSD text
+      - name: Patch startup OSD text RUNAv.51
         run: |
           cd inav
 
@@ -377,40 +295,176 @@ jobs:
             echo "Target found: ${TARGET}"
           else
             echo "TARGET NOT FOUND: ${TARGET}"
-            echo "Available SPEEDYBEE/F405/WING targets:"
-            make help | grep -i -E "SPEEDYBEE|F405|WING|RUNA" || true
+            make help | grep -i -E "SPEEDYBEE|F405|WING" || true
             exit 1
           fi
 
-      - name: Build RUNA FC51 firmware
+      - name: Build SPEEDYBEEF405WING firmware
         run: |
           cd inav/build
           make clean_${TARGET} || true
           make ${TARGET} -j2 VERBOSE=1
 
-      - name: Collect firmware and CLI presets
-        if: success()
+      - name: Find built files
+        if: always()
+        run: |
+          echo "Built firmware files:"
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+
+      - name: Patch RUNA name in HEX and BIN
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+
+          old = os.environ["OLD_TARGET_NAME"].encode()
+          new = os.environ["NEW_TARGET_NAME"].encode()
+          target = os.environ["TARGET"]
+
+          print("OLD:", os.environ["OLD_TARGET_NAME"], "length:", len(old))
+          print("NEW:", os.environ["NEW_TARGET_NAME"], "length:", len(new))
+
+          if len(old) != len(new):
+              raise SystemExit(f"Length mismatch: old={len(old)} new={len(new)}")
+
+          out = Path("out")
+          out.mkdir(exist_ok=True)
+
+          # -------------------------
+          # Patch HEX
+          # -------------------------
+          hex_files = list(Path("inav/build").rglob(f"*{target}*.hex"))
+
+          if not hex_files:
+              hex_files = list(Path("inav/build").rglob("*.hex"))
+
+          if not hex_files:
+              raise SystemExit("No HEX files found")
+
+          src_hex = hex_files[0]
+          print("Using HEX:", src_hex)
+
+          records = []
+          memory = {}
+          base = 0
+
+          def parse_record(line):
+              count = int(line[1:3], 16)
+              addr = int(line[3:7], 16)
+              rectype = int(line[7:9], 16)
+              data = bytes.fromhex(line[9:9 + count * 2])
+              return count, addr, rectype, data
+
+          for line in src_hex.read_text().splitlines():
+              if not line.startswith(":"):
+                  records.append((line, None))
+                  continue
+
+              count, addr, rectype, data = parse_record(line)
+              records.append((line, (count, addr, rectype, data, base)))
+
+              if rectype == 0:
+                  absolute = base + addr
+                  for i, b in enumerate(data):
+                      memory[absolute + i] = b
+              elif rectype == 4:
+                  base = int.from_bytes(data, "big") << 16
+              elif rectype == 2:
+                  base = int.from_bytes(data, "big") << 4
+
+          if not memory:
+              raise SystemExit("No data records found in HEX")
+
+          min_addr = min(memory)
+          max_addr = max(memory)
+          image = bytearray([0xFF] * (max_addr - min_addr + 1))
+
+          for addr, b in memory.items():
+              image[addr - min_addr] = b
+
+          positions = []
+          start = 0
+
+          while True:
+              pos = image.find(old, start)
+              if pos < 0:
+                  break
+              positions.append(pos)
+              start = pos + 1
+
+          if not positions:
+              print("WARNING: target string not found in HEX")
+          else:
+              for pos in positions:
+                  abs_pos = min_addr + pos
+                  print("Patch HEX target name at:", hex(abs_pos))
+                  for i, b in enumerate(new):
+                      memory[abs_pos + i] = b
+
+          def checksum(record_bytes):
+              return ((~sum(record_bytes) + 1) & 0xFF)
+
+          patched_lines = []
+
+          for line, info in records:
+              if info is None:
+                  patched_lines.append(line)
+                  continue
+
+              count, addr, rectype, data, rec_base = info
+
+              if rectype == 0:
+                  absolute = rec_base + addr
+                  new_data = bytes(memory[absolute + i] for i in range(count))
+
+                  rec = bytearray()
+                  rec.append(count)
+                  rec.append((addr >> 8) & 0xFF)
+                  rec.append(addr & 0xFF)
+                  rec.append(rectype)
+                  rec.extend(new_data)
+                  chk = checksum(rec)
+
+                  patched_lines.append(":" + rec.hex().upper() + f"{chk:02X}")
+              else:
+                  patched_lines.append(line)
+
+          dst_hex = out / "RUNA_FC51_SAFE.hex"
+          dst_hex.write_text("\n".join(patched_lines) + "\n")
+          print("Patched HEX written:", dst_hex)
+
+          # -------------------------
+          # Patch BIN
+          # -------------------------
+          bin_files = list(Path("inav/build").rglob(f"*{target}*.bin"))
+
+          if not bin_files:
+              bin_files = list(Path("inav/build").rglob("*.bin"))
+
+          for src_bin in bin_files:
+              data = src_bin.read_bytes()
+              count = data.count(old)
+
+              if count:
+                  patched = data.replace(old, new)
+                  dst_bin = out / "RUNA_FC51_SAFE.bin"
+                  dst_bin.write_bytes(patched)
+                  print("Patched BIN written:", dst_bin, "replacements:", count)
+                  break
+
+          # Copy ELF if exists
+          elf_files = list(Path("inav/build").rglob(f"*{target}*.elf"))
+          if elf_files:
+              dst_elf = out / "RUNA_FC51_SAFE.elf"
+              dst_elf.write_bytes(elf_files[0].read_bytes())
+              print("ELF copied:", dst_elf)
+          PY
+
+      - name: Create RUNA FC51 CLI presets
         run: |
           mkdir -p out
-          cd inav/build
 
-          FOUND=0
-
-          while IFS= read -r f; do
-            base="$(basename "$f")"
-            dst="../../out/RUNA_FC51_${base}"
-            cp "$f" "$dst"
-            echo "Copied: $dst"
-            FOUND=$((FOUND + 1))
-          done < <(find . -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
-
-          if [ "$FOUND" -eq 0 ]; then
-            echo "ERROR: no firmware files found"
-            find . -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
-            exit 1
-          fi
-
-          cat > ../../out/RUNA_FC51_BASE_SETUP.cli <<'EOF'
+          cat > out/RUNA_FC51_BASE_SETUP.cli <<'EOF'
           batch start
 
           # RUNA FC 5.1 base setup
@@ -449,7 +503,7 @@ jobs:
           save
           EOF
 
-          cat > ../../out/RUNA_FC51_VTX_5G8_5820_5695_5733.cli <<'EOF'
+          cat > out/RUNA_FC51_VTX_5G8_5820_5695_5733.cli <<'EOF'
           batch start
 
           # RUNA FC51 VTX 5.8 GHz
@@ -508,7 +562,7 @@ jobs:
           save
           EOF
 
-          cat > ../../out/RUNA_FC51_VTX_3G3.cli <<'EOF'
+          cat > out/RUNA_FC51_VTX_3G3.cli <<'EOF'
           batch start
 
           feature VTX
@@ -527,13 +581,17 @@ jobs:
           save
           EOF
 
-          cat > ../../out/README_RUNA_FC51.txt <<'EOF'
-          RUNA FC51 firmware
+          cat > out/README_RUNA_FC51_SAFE.txt <<'EOF'
+          RUNA FC51 SAFE firmware
+
+          IMPORTANT:
+          This build does NOT create a new target.
+          It builds original SPEEDYBEEF405WING and then patches the name in HEX/BIN.
 
           Base:
           - INAV 7.1.2
-          - Base target: SPEEDYBEEF405WING
-          - New target: RUNA_FC51
+          - Real target: SPEEDYBEEF405WING
+          - Display name after patch: SPEEDYBEE51+RUNA!
 
           FC 5.1 dump hardware:
           - ACC/GYRO: ICM42605
@@ -543,7 +601,6 @@ jobs:
           - align_board_yaw: 1800
 
           Added:
-          - RUNA_FC51 name
           - Startup OSD text: RUNAv.51
           - RUNA OSD shutter on Layout 2
           - VTX 3.3GHz table in FREQUENCYGROUP_1G3
@@ -555,39 +612,39 @@ jobs:
           Flash:
           1. Use INAV Configurator 7.x
           2. Full Chip Erase
-          3. Flash RUNA_FC51 hex
+          3. Flash RUNA_FC51_SAFE.hex
           4. CLI:
              defaults
              save
 
-          5. After reboot, wait 15 seconds without touching board.
+          5. Wait 15 seconds without touching board.
           6. Apply RUNA_FC51_BASE_SETUP.cli
           7. Calibrate accelerometer
-          8. Check status:
-             GYRO=OK
-             ACC=OK
-             BARO=OK
-             HWFAIL must be absent
+          8. Check:
+             status
+             get align_board
 
-          9. If all good, apply your Dump5.1.txt.
-          10. After dump, check:
-              get align_board
+          Required:
+          - GYRO=OK
+          - ACC=OK
+          - BARO=OK
+          - MAG=OK
+          - HWFAIL absent
 
-          Correct for FC 5.1 dump:
-              align_board_roll = 0
-              align_board_pitch = 0
-              align_board_yaw = 1800
+          If GYRO/ACC are UNAVAILABLE:
+          do not fly and return to working FC5.1 firmware/dump.
 
-          IMPORTANT:
+          After sensors are OK:
+          apply Dump5.1.txt carefully and re-check align_board_yaw = 1800.
+
           Test without propeller.
-          Do not fly if model drifts, axes are wrong, or HWFAIL appears.
           EOF
 
-          ls -la ../../out
+          echo "OUT files:"
+          ls -lah out
 
       - name: Upload firmware
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC51
+          name: RUNA-FC51-SAFE
           path: out/*
