@@ -1,326 +1,593 @@
-name: Build RUNA FC 5.1 Custom Fixed Version
+name: Build RUNA FC51
 
 on:
   workflow_dispatch:
-    inputs:
-      target:
-        description: "FC target"
-        required: true
-        default: "SPEEDYBEEF405WING"
-
-      runa_name:
-        description: "RUNA name, must be same length or shorter than target"
-        required: true
-        default: "RUNA_FC51_F405WG"
-
-      inav_ref:
-        description: "Fixed INAV version/tag. Do NOT use master."
-        required: true
-        default: "7.1.2"
+  push:
 
 jobs:
-  build-runa:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-22.04
+
+    env:
+      INAV_VERSION: 7.1.2
+      BASE_TARGET: SPEEDYBEEF405WING
+      TARGET: RUNA_FC51
+      DISPLAY_NAME: RUNA_FC51
 
     steps:
-      - name: Install dependencies
+      - name: Install deps
         run: |
-          sudo apt update
-          sudo apt install -y \
+          sudo apt-get update -y -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends \
             git \
-            make \
+            build-essential \
+            g++ \
+            ruby \
             cmake \
-            ninja-build \
+            make \
             gcc-arm-none-eabi \
             binutils-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-dev \
+            ninja-build \
             python3 \
-            python3-pip \
-            curl \
-            unzip
+            python3-pip
 
-      - name: Clone fixed INAV version
+      - name: Clone INAV 7.1.2
         run: |
-          git clone --recursive https://github.com/iNavFlight/inav.git inav
+          set -e
+          echo "Cloning INAV ${INAV_VERSION}..."
+
+          for i in 1 2 3 4 5; do
+            echo "Clone attempt $i"
+
+            git clone \
+              --branch ${INAV_VERSION} \
+              --depth 1 \
+              --single-branch \
+              --config http.version=HTTP/1.1 \
+              --config http.postBuffer=524288000 \
+              https://github.com/iNavFlight/inav.git && break
+
+            echo "Clone failed, retrying..."
+            rm -rf inav
+            sleep 10
+          done
+
+          test -d inav || exit 1
           cd inav
-          git fetch --tags
-          git checkout "${{ github.event.inputs.inav_ref }}"
-          git submodule update --init --recursive
+          git rev-parse HEAD
 
-      - name: Show INAV version info
+      - name: Create RUNA_FC51 target from SPEEDYBEEF405WING
         run: |
           cd inav
-          echo "================================"
-          echo "RUNA CUSTOM BUILD"
-          echo "Target: ${{ github.event.inputs.target }}"
-          echo "RUNA name: ${{ github.event.inputs.runa_name }}"
-          echo "INAV ref: ${{ github.event.inputs.inav_ref }}"
-          echo "================================"
-          git log -1 --oneline
-          git describe --tags --always || true
 
-      - name: Create RUNA patch script
+          rm -rf src/main/target/${TARGET}
+          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
+
+          if [ -f "src/main/target/${TARGET}/CMakeLists.txt" ]; then
+            sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
+          fi
+
+          echo "Created ${TARGET} from ${BASE_TARGET}"
+          ls -la src/main/target/${TARGET}
+
+      - name: Patch RUNA FC51 target metadata
         run: |
-          mkdir -p scripts
+          cd inav
 
-          cat > scripts/patch_runa_name.py <<'PY'
-          #!/usr/bin/env python3
-          import argparse
+          python3 <<'PY'
           from pathlib import Path
+          import os
+          import re
 
-          def patch_file(path: Path, old: bytes, new: bytes) -> bool:
-              data = path.read_bytes()
+          target = os.environ["TARGET"]
+          display_name = os.environ["DISPLAY_NAME"]
 
-              if old not in data:
-                  print(f"[SKIP] {path.name}: target string not found")
-                  return False
+          target_dir = Path(f"src/main/target/{target}")
+          target_h = target_dir / "target.h"
 
-              if len(new) > len(old):
-                  raise ValueError(
-                      f"RUNA name too long: {new.decode(errors='ignore')} "
-                      f"({len(new)} bytes) > target name "
-                      f"{old.decode(errors='ignore')} ({len(old)} bytes). "
-                      f"Use shorter runa_name."
-                  )
+          text = target_h.read_text(encoding="utf-8")
 
-              new_padded = new + b"\x00" * (len(old) - len(new))
-              patched = data.replace(old, new_padded)
-              path.write_bytes(patched)
+          # Не ломаем железо SPEEDYBEEF405WING.
+          # FC 5.1 по dump работает как SPEEDYBEEF405WING + ICM42605 + SPL06 + HMC5883.
+          # Поэтому пины гиры/баро/OSD оставляем от базового target.
 
-              print(f"[OK] {path.name}: {old!r} -> {new_padded!r}")
-              return True
+          # Меняем только видимые строки, если они есть.
+          replacements = {
+              "SPEEDYBEEF405WING": target,
+              "SpeedyBee F405 Wing": "RUNA FC51",
+              "SPEEDYBEE F405 WING": "RUNA FC51",
+          }
 
-          def main():
-              parser = argparse.ArgumentParser()
-              parser.add_argument("--folder", required=True)
-              parser.add_argument("--old", required=True)
-              parser.add_argument("--new", required=True)
-              args = parser.parse_args()
+          for old, new in replacements.items():
+              text = text.replace(old, new)
 
-              folder = Path(args.folder)
-              old = args.old.encode("ascii")
-              new = args.new.encode("ascii")
+          target_h.write_text(text, encoding="utf-8")
 
-              if not folder.exists():
-                  raise FileNotFoundError(folder)
-
-              files = []
-              for pattern in ("*.hex", "*.bin", "*.elf"):
-                  files.extend(folder.rglob(pattern))
-
-              if not files:
-                  raise RuntimeError("No firmware files found")
-
-              count = 0
-
-              for f in files:
-                  try:
-                      if patch_file(f, old, new):
-                          count += 1
-                  except Exception as e:
-                      print(f"[ERROR] {f}: {e}")
-
-              print(f"Patched files: {count}")
-
-              if count == 0:
-                  print("WARNING: no files patched. Firmware built, but name may remain original.")
-
-          if __name__ == "__main__":
-              main()
+          print("RUNA FC51 target metadata patched")
+          print("Checking important hardware strings:")
+          for pattern in ["ICM42605", "SPL06", "HMC5883", "QMC5883", "MAX7456", "AT7456", "SPI", "I2C"]:
+              if pattern in text:
+                  print("FOUND:", pattern)
           PY
 
-      - name: Create RUNA CLI files
+          grep -n -E "ICM42605|SPL06|HMC|QMC|MAX7456|AT7456|SPI|I2C|RUNA|SPEEDY" src/main/target/${TARGET}/target.h || true
+
+      - name: Patch RUNA name in MSP
         run: |
-          mkdir -p cli
+          cd inav
 
-          cat > cli/RUNA_FC51_VTX_5G8.cli <<'CLI'
-          # RUNA FC 5.1 - VTX 5.8
-          # Частоты RUNA:
-          # 5820 / 5695 / 5733
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          import os
 
-          set vtx_band = 5
-          set vtx_channel = 3
-          set vtx_freq = 5733
-          set vtx_power = 5
+          display_name = os.environ["DISPLAY_NAME"]
 
-          save
-          CLI
+          path = Path("src/main/fc/fc_msp.c")
 
-          cat > cli/RUNA_FC51_VTX_3G3.cli <<'CLI'
-          # RUNA FC 5.1 - VTX 3.3
-          # ВНИМАНИЕ:
-          # Использовать только если VTX реально поддерживает 3.3 GHz.
-          # Обычный VTX 5.8 на 3.3 GHz работать не будет.
+          if not path.exists():
+              print("WARNING: fc_msp.c not found")
+              raise SystemExit(0)
 
-          set vtx_band = 1
-          set vtx_channel = 1
-          set vtx_freq = 3300
-          set vtx_power = 5
+          text = path.read_text(encoding="utf-8")
 
-          save
-          CLI
+          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
 
-          cat > cli/RUNA_FC51_SHUTTER_ARM_DISARM.cli <<'CLI'
-          # RUNA FC 5.1
-          # ШТОРА + VTX POWER ARM/DISARM
+          replacement = f'''const char *runaTargetName = "{display_name}";
+                  sbufWriteU8(dst, strlen(runaTargetName));
+                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));'''
 
-          # Нужно:
-          # DISARM -> VTX low power / power 1
-          # ARM    -> VTX power 5
+          text, count = re.subn(pattern, replacement, text, count=1)
 
-          set vtx_power = 5
-          set vtx_low_power_disarm = ON
+          path.write_text(text, encoding="utf-8")
+          print("MSP RUNA name patch count:", count)
+          PY
 
-          # ШТОРА:
-          #
-          # В INAV Configurator:
-          #
-          # 1. OSD -> Layout 0 = обычный экран
-          # 2. OSD -> Layout 1 = шторка
-          # 3. В Layout 1 убери высоту/лишние элементы
-          # 4. Modes -> назначить CH8/AUX4:
-          #
-          # LOW/MID 900-1666  = обычный экран / Layout 0
-          # HIGH    1667-2100 = шторка / Layout 1
-          #
-          # CLI-команды OSD Layout в разных версиях INAV могут отличаться,
-          # поэтому саму штору безопаснее назначать через Configurator.
-
-          save
-          CLI
-
-          cat > cli/RUNA_FC51_ALL_IN_ONE_SAFE.cli <<'CLI'
-          # RUNA FC 5.1 - ALL IN ONE SAFE CLI
-          #
-          # Этот файл НЕ трогает:
-          # - gyro axes
-          # - board alignment
-          # - UART
-          # - motors
-          # - servos
-          # - mixer
-          #
-          # Поэтому меньше шанс снова получить проблему,
-          # где работает только YAW.
-
-          # -------------------------------
-          # VTX 5.8 DEFAULT
-          # -------------------------------
-
-          set vtx_band = 5
-          set vtx_channel = 3
-          set vtx_freq = 5733
-          set vtx_power = 5
-
-          # -------------------------------
-          # DISARM / ARM VTX POWER
-          # -------------------------------
-
-          # DISARM -> low power / power 1
-          # ARM    -> vtx_power 5
-
-          set vtx_low_power_disarm = ON
-
-          # -------------------------------
-          # ШТОРА
-          # -------------------------------
-          #
-          # Настроить руками в INAV Configurator:
-          #
-          # OSD Layout 0 = обычный экран
-          # OSD Layout 1 = шторка
-          #
-          # CH8/AUX4 LOW/MID = Layout 0
-          # CH8/AUX4 HIGH    = Layout 1
-
-          save
-          CLI
-
-      - name: Build INAV firmware
+      - name: Patch startup OSD text
         run: |
-          mkdir -p inav/build
-          cd inav/build
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("WARNING: osd.c not found")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
+          new = 'tfp_sprintf(string_buffer, "RUNAv.51");'
+
+          if old in text:
+              text = text.replace(old, new, 1)
+              text = text.replace(
+                  'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
+                  'uint8_t xPos = OSD_CENTER_S(string_buffer);',
+                  1
+              )
+              print("Startup OSD text patched: RUNAv.51")
+          else:
+              print("WARNING: startup text pattern not found")
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Patch RUNA OSD shutter
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("WARNING: osd.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
+
+          replacement = r"""
+                  static bool runaShutterWasActive = false;
+                  static uint8_t runaShutterNextRow = 0;
+
+                  if (currentLayout == 2) {
+                      textAttributes_t runaAttr = TEXT_ATTRIBUTES_NONE;
+                      TEXT_ATTRIBUTES_ADD_SOLID_BG(runaAttr);
+
+                      char runaMask[64];
+
+                      uint8_t cols = osdDisplayPort->cols;
+                      uint8_t rows = osdDisplayPort->rows;
+
+                      if (cols > 63) {
+                          cols = 63;
+                      }
+
+                      const uint8_t windowWidth = cols >= 30 ? 10 : cols / 3;
+                      const uint8_t windowHeight = rows >= 16 ? 4 : rows / 3;
+
+                      const uint8_t windowX = (cols - windowWidth) / 2;
+                      const uint8_t windowY = (rows - windowHeight) / 2;
+
+                      if (!runaShutterWasActive) {
+                          displayClearScreen(osdDisplayPort);
+                          runaShutterWasActive = true;
+                          runaShutterNextRow = 0;
+                      }
+
+                      for (uint8_t pass = 0; pass < 2; pass++) {
+                          uint8_t y = runaShutterNextRow;
+
+                          const bool inWindowY = (y >= windowY) && (y < windowY + windowHeight);
+
+                          if (!inWindowY) {
+                              memset(runaMask, ' ', cols);
+                              runaMask[cols] = '\0';
+                              displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
+                          } else {
+                              if (windowX > 0) {
+                                  memset(runaMask, ' ', windowX);
+                                  runaMask[windowX] = '\0';
+                                  displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
+                              }
+
+                              const uint8_t rightX = windowX + windowWidth;
+
+                              if (rightX < cols) {
+                                  const uint8_t rightWidth = cols - rightX;
+                                  memset(runaMask, ' ', rightWidth);
+                                  runaMask[rightWidth] = '\0';
+                                  displayWriteWithAttr(osdDisplayPort, rightX, y, runaMask, runaAttr);
+                              }
+                          }
+
+                          runaShutterNextRow++;
+
+                          if (runaShutterNextRow >= rows) {
+                              runaShutterNextRow = 0;
+                          }
+                      }
+                  } else {
+                      if (runaShutterWasActive) {
+                          displayClearScreen(osdDisplayPort);
+                          runaShutterWasActive = false;
+                          runaShutterNextRow = 0;
+                      }
+
+                      osdDrawNextElement();
+                  }
+
+                  displayHeartbeat(osdDisplayPort);
+                  displayCommitTransaction(osdDisplayPort);"""
+
+          new_text, count = re.subn(pattern, replacement, text, count=1)
+
+          if count != 1:
+              print("WARNING: OSD draw block not found, shutter skipped")
+              raise SystemExit(0)
+
+          path.write_text(new_text, encoding="utf-8")
+          print("RUNA OSD shutter patched")
+          PY
+
+      - name: Patch VTX 3.3GHz table
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/vtx_string.c")
+
+          if not path.exists():
+              print("vtx_string.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          def sub_once(text, pattern, repl, name, flags=0):
+              new_text, count = re.subn(pattern, repl, text, count=1, flags=flags)
+              print(f"{name}: patch count = {count}")
+              return new_text if count else text
+
+          text = sub_once(
+              text,
+              r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_BAND_COUNT 6",
+              "1G3 band count"
+          )
+
+          text = sub_once(
+              text,
+              r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_POWER_COUNT 5",
+              "1G3 power count"
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
+              """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
+              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
+              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
+              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
+              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
+              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
+              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
+          };""",
+              "3.3GHz frequency table",
+              flags=re.S
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
+              "-", "A", "B", "C", "D", "E", "F",
+          };""",
+              "3.3GHz band names",
+              flags=re.S
+          )
+
+          text = sub_once(
+              text,
+              r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
+              'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
+              "3.3GHz band letters"
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
+              "---", "25", "200", "400", "800", "MAX"
+          };""",
+              "3.3GHz power names",
+              flags=re.S
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("RUNA VTX 3.3 table patch finished")
+          PY
+
+      - name: Configure CMake
+        run: |
+          cd inav
+          mkdir -p build
+          cd build
           cmake ..
-          make "${{ github.event.inputs.target }}" -j"$(nproc)"
 
-      - name: Patch firmware name to RUNA
+      - name: Check target exists
         run: |
-          python3 scripts/patch_runa_name.py \
-            --folder inav/build \
-            --old "${{ github.event.inputs.target }}" \
-            --new "${{ github.event.inputs.runa_name }}"
+          cd inav/build
 
-      - name: Prepare artifact
+          echo "Checking target: ${TARGET}"
+
+          if make help | grep -w "${TARGET}"; then
+            echo "Target found: ${TARGET}"
+          else
+            echo "TARGET NOT FOUND: ${TARGET}"
+            echo "Available SPEEDYBEE/F405/WING targets:"
+            make help | grep -i -E "SPEEDYBEE|F405|WING|RUNA" || true
+            exit 1
+          fi
+
+      - name: Build RUNA FC51 firmware
         run: |
-          mkdir -p artifact
-          mkdir -p artifact/cli
+          cd inav/build
+          make clean_${TARGET} || true
+          make ${TARGET} -j2 VERBOSE=1
 
-          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -exec cp {} artifact/ \;
+      - name: Collect firmware and CLI presets
+        if: success()
+        run: |
+          mkdir -p out
+          cd inav/build
 
-          cp cli/*.cli artifact/cli/
+          FOUND=0
 
-          cat > artifact/RUNA_INFO.txt <<EOF
-          RUNA FC 5.1 CUSTOM FIXED VERSION
+          while IFS= read -r f; do
+            base="$(basename "$f")"
+            dst="../../out/RUNA_FC51_${base}"
+            cp "$f" "$dst"
+            echo "Copied: $dst"
+            FOUND=$((FOUND + 1))
+          done < <(find . -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
 
-          Base target:
-          ${{ github.event.inputs.target }}
+          if [ "$FOUND" -eq 0 ]; then
+            echo "ERROR: no firmware files found"
+            find . -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+            exit 1
+          fi
 
-          RUNA name:
-          ${{ github.event.inputs.runa_name }}
+          cat > ../../out/RUNA_FC51_BASE_SETUP.cli <<'EOF'
+          batch start
 
-          INAV version/tag:
-          ${{ github.event.inputs.inav_ref }}
+          # RUNA FC 5.1 base setup
+          # From FC 5.1 dump:
+          # ACC/GYRO: ICM42605
+          # BARO: SPL06
+          # MAG: HMC5883
+          # Board yaw: 1800
 
-          IMPORTANT:
-          This workflow uses fixed INAV tag:
-          ${{ github.event.inputs.inav_ref }}
+          set acc_hardware = ICM42605
+          set baro_hardware = SPL06
+          set mag_hardware = HMC5883
+          set align_mag = CW0FLIP
 
-          It does NOT use master.
-          So it should NOT accidentally build INAV 9.0.1.
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 1800
 
-          Functions:
-          - RUNA name patch
-          - VTX 5.8
-          - VTX 3.3
-          - ШТОРА / OSD Layout idea
-          - DISARM -> VTX low power / power 1
-          - ARM -> VTX power 5
+          set gyro_zero_x = 0
+          set gyro_zero_y = 0
+          set gyro_zero_z = 0
 
-          CLI files:
-          - cli/RUNA_FC51_VTX_5G8.cli
-          - cli/RUNA_FC51_VTX_3G3.cli
-          - cli/RUNA_FC51_SHUTTER_ARM_DISARM.cli
-          - cli/RUNA_FC51_ALL_IN_ONE_SAFE.cli
+          set acczero_x = 0
+          set acczero_y = 0
+          set acczero_z = 0
 
-          After flashing:
-          1. Open INAV Configurator
-          2. Connect FC
-          3. Open CLI
-          4. Paste:
-             cli/RUNA_FC51_ALL_IN_ONE_SAFE.cli
+          set accgain_x = 4096
+          set accgain_y = 4096
+          set accgain_z = 4096
 
-          Or separately:
-          1. Paste VTX profile:
-             cli/RUNA_FC51_VTX_5G8.cli
-             or
-             cli/RUNA_FC51_VTX_3G3.cli
+          set vbat_adc_channel = 1
+          set rssi_adc_channel = 4
+          set current_adc_channel = 2
+          set airspeed_adc_channel = 3
 
-          2. Paste:
-             cli/RUNA_FC51_SHUTTER_ARM_DISARM.cli
-
-          This build does not touch:
-          - gyro axes
-          - UART
-          - motors
-          - servos
-          - mixer
-          - receiver mapping
+          save
           EOF
 
-          echo "=== ARTIFACT FILES ==="
-          find artifact -type f -print
+          cat > ../../out/RUNA_FC51_VTX_5G8_5820_5695_5733.cli <<'EOF'
+          batch start
 
-      - name: Upload RUNA firmware
+          # RUNA FC51 VTX 5.8 GHz
+          # VTX: IRC Tramp
+          # Port: UART5 / TX5
+          # AUX2 = CH6
+          #
+          # CH6 LOW  -> 5820 MHz = FATSHARK F5
+          # CH6 MID  -> 5695 MHz = RACEBAND R2
+          # CH6 HIGH -> 5733 MHz = BAND B B1
+
+          feature VTX
+
+          # UART5 / TX5 -> IRC Tramp
+          # serial 4 = UART5
+          serial 4 4096 115200 115200 0 115200
+
+          set vtx_frequency_group = FREQUENCYGROUP_5G8
+
+          # Start channel: FATSHARK F5 / 5820 MHz
+          set vtx_band = 4
+          set vtx_channel = 5
+          set vtx_power = 5
+          set vtx_low_power_disarm = OFF
+          set vtx_pit_mode_chan = 1
+          set vtx_max_power_override = 0
+
+          # Clear old VTX logic 0-8
+          logic 0 0 -1 0 0 0 0 0 0
+          logic 1 0 -1 0 0 0 0 0 0
+          logic 2 0 -1 0 0 0 0 0 0
+          logic 3 0 -1 0 0 0 0 0 0
+          logic 4 0 -1 0 0 0 0 0 0
+          logic 5 0 -1 0 0 0 0 0 0
+          logic 6 0 -1 0 0 0 0 0 0
+          logic 7 0 -1 0 0 0 0 0 0
+          logic 8 0 -1 0 0 0 0 0 0
+
+          # CH6 LOW / MID / HIGH detectors
+          logic 0 1 -1 4 1 6 0 0 0
+          logic 1 1 -1 5 1 6 0 0 0
+          logic 2 1 -1 6 1 6 0 0 0
+
+          # LOW -> FATSHARK F5 / 5820 MHz
+          logic 3 1 0 30 0 4 0 0 0
+          logic 4 1 0 31 0 5 0 0 0
+
+          # MID -> RACEBAND R2 / 5695 MHz
+          logic 5 1 1 30 0 5 0 0 0
+          logic 6 1 1 31 0 2 0 0 0
+
+          # HIGH -> BAND B B1 / 5733 MHz
+          logic 7 1 2 30 0 2 0 0 0
+          logic 8 1 2 31 0 1 0 0 0
+
+          save
+          EOF
+
+          cat > ../../out/RUNA_FC51_VTX_3G3.cli <<'EOF'
+          batch start
+
+          feature VTX
+
+          # RUNA 3.3GHz uses patched FREQUENCYGROUP_1G3 table
+          set vtx_frequency_group = FREQUENCYGROUP_1G3
+          set vtx_band = 1
+          set vtx_channel = 1
+          set vtx_power = 5
+          set vtx_low_power_disarm = OFF
+          set vtx_halfduplex = ON
+          set vtx_smartaudio_early_akk_workaround = ON
+          set vtx_smartaudio_alternate_softserial_method = ON
+          set vtx_smartaudio_stopbits = 2
+
+          save
+          EOF
+
+          cat > ../../out/README_RUNA_FC51.txt <<'EOF'
+          RUNA FC51 firmware
+
+          Base:
+          - INAV 7.1.2
+          - Base target: SPEEDYBEEF405WING
+          - New target: RUNA_FC51
+
+          FC 5.1 dump hardware:
+          - ACC/GYRO: ICM42605
+          - BARO: SPL06
+          - MAG: HMC5883
+          - align_mag: CW0FLIP
+          - align_board_yaw: 1800
+
+          Added:
+          - RUNA_FC51 name
+          - Startup OSD text: RUNAv.51
+          - RUNA OSD shutter on Layout 2
+          - VTX 3.3GHz table in FREQUENCYGROUP_1G3
+          - VTX 5.8 switching preset:
+            CH6 LOW  = 5820 MHz
+            CH6 MID  = 5695 MHz
+            CH6 HIGH = 5733 MHz
+
+          Flash:
+          1. Use INAV Configurator 7.x
+          2. Full Chip Erase
+          3. Flash RUNA_FC51 hex
+          4. CLI:
+             defaults
+             save
+
+          5. After reboot, wait 15 seconds without touching board.
+          6. Apply RUNA_FC51_BASE_SETUP.cli
+          7. Calibrate accelerometer
+          8. Check status:
+             GYRO=OK
+             ACC=OK
+             BARO=OK
+             HWFAIL must be absent
+
+          9. If all good, apply your Dump5.1.txt.
+          10. After dump, check:
+              get align_board
+
+          Correct for FC 5.1 dump:
+              align_board_roll = 0
+              align_board_pitch = 0
+              align_board_yaw = 1800
+
+          IMPORTANT:
+          Test without propeller.
+          Do not fly if model drifts, axes are wrong, or HWFAIL appears.
+          EOF
+
+          ls -la ../../out
+
+      - name: Upload firmware
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA_FC51_CUSTOM_FIXED
-          path: artifact/
+          name: RUNA-FC51
+          path: out/*
