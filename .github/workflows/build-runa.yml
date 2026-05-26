@@ -1,45 +1,470 @@
-name: Check INAV ICM40609 Support
+name: Build RUNA FC51 ICM40609 CS Scan
 
 on:
   workflow_dispatch:
+  push:
 
 jobs:
-  check:
+  build:
     runs-on: ubuntu-22.04
 
     strategy:
       fail-fast: false
       matrix:
-        ref:
-          - 8.0.1
-          - 9.0.1
-          - master
+        include:
+          - name: SPI1_PA4
+            spi: BUS_SPI1
+            cs: PA4
+          - name: SPI1_PA15
+            spi: BUS_SPI1
+            cs: PA15
+          - name: SPI1_PB12
+            spi: BUS_SPI1
+            cs: PB12
+          - name: SPI1_PB2
+            spi: BUS_SPI1
+            cs: PB2
+          - name: SPI1_PC4
+            spi: BUS_SPI1
+            cs: PC4
+          - name: SPI1_PC13
+            spi: BUS_SPI1
+            cs: PC13
+          - name: SPI1_PC15
+            spi: BUS_SPI1
+            cs: PC15
+          - name: SPI2_PB12
+            spi: BUS_SPI2
+            cs: PB12
+          - name: SPI2_PB2
+            spi: BUS_SPI2
+            cs: PB2
+          - name: SPI2_PC4
+            spi: BUS_SPI2
+            cs: PC4
+          - name: SPI2_PC13
+            spi: BUS_SPI2
+            cs: PC13
+          - name: SPI2_PC15
+            spi: BUS_SPI2
+            cs: PC15
+
+    env:
+      INAV_VERSION: 7.1.2
+      TARGET: SPEEDYBEEF405WING
+      OLD_TARGET_NAME: SPEEDYBEEF405WING
+      NEW_TARGET_NAME: SPEEDYBEE51+RUNA!
 
     steps:
       - name: Install deps
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y git
+          sudo apt-get update -y -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends \
+            git \
+            build-essential \
+            g++ \
+            ruby \
+            cmake \
+            make \
+            gcc-arm-none-eabi \
+            binutils-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-dev \
+            ninja-build \
+            python3 \
+            python3-pip
 
-      - name: Clone INAV
+      - name: Clone INAV 7.1.2
         run: |
-          git clone --branch ${{ matrix.ref }} --depth 1 https://github.com/iNavFlight/inav.git inav || \
-          git clone --depth 1 https://github.com/iNavFlight/inav.git inav
+          set -e
 
-      - name: Search ICM40609
+          for i in 1 2 3 4 5; do
+            echo "Clone attempt $i"
+
+            git clone \
+              --branch ${INAV_VERSION} \
+              --depth 1 \
+              --single-branch \
+              --config http.version=HTTP/1.1 \
+              --config http.postBuffer=524288000 \
+              https://github.com/iNavFlight/inav.git && break
+
+            echo "Clone failed, retrying..."
+            rm -rf inav
+            sleep 10
+          done
+
+          test -d inav || exit 1
+          cd inav
+          git rev-parse HEAD
+
+      - name: Patch target IMU CS/SPI for ICM40609 test
         run: |
           cd inav
 
-          echo "===== CHECK REF: ${{ matrix.ref }} ====="
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+          import re
 
-          echo "Searching ICM40609 / ICM40609D / 40609..."
-          grep -RniE "ICM40609|ICM40609D|40609" src/main || true
+          target = os.environ["TARGET"]
+          spi = "${{ matrix.spi }}"
+          cs = "${{ matrix.cs }}"
 
-          echo "Searching accgyro files..."
-          find src/main/drivers/accgyro -type f | sort | grep -i -E "icm|gyro|acc" || true
+          path = Path(f"src/main/target/{target}/target.h")
+          text = path.read_text(encoding="utf-8")
 
-          echo "Searching allowed acc_hardware names..."
-          grep -RniE "ICM42605|ICM40609|BMI270|LSM6DXX|MPU6000" src/main | head -200 || true
+          remove_patterns = [
+              r'^\s*#define\s+USE_IMU_ICM42605\s*$',
+              r'^\s*#define\s+IMU_ICM42605_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42605_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42605_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+ICM42605_EXTI_PIN\s+\S+\s*$',
 
-          echo "Searching SpeedyBee targets..."
-          find src/main/target -maxdepth 2 -type f | grep -i "SPEEDYBEE" || true
+              r'^\s*#define\s+USE_IMU_ICM42688P\s*$',
+              r'^\s*#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42688P_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42688P_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+ICM42688P_EXTI_PIN\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_BMI270\s*$',
+              r'^\s*#define\s+BMI270_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+BMI270_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+IMU_BMI270_ALIGN\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_LSM6DXX\s*$',
+              r'^\s*#define\s+LSM6DXX_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+LSM6DXX_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*$',
+          ]
+
+          for p in remove_patterns:
+              text = re.sub(p, "", text, flags=re.M)
+
+          text += f"""
+
+          /*
+           * RUNA FC51 ICM40609 CS/SPI scan test
+           * Using patched ICM42605 driver as transport for ICM40609.
+           * Variant: {spi}_{cs}
+           */
+
+          #define USE_IMU_ICM42605
+          #define ICM42605_SPI_BUS {spi}
+          #define ICM42605_CS_PIN {cs}
+          #define IMU_ICM42605_ALIGN CW0_DEG
+
+          #define USE_BARO_SPL06
+          #define BARO_I2C_BUS BUS_I2C1
+
+          #define USE_MAG_HMC5883
+          #define MAG_I2C_BUS BUS_I2C1
+          """
+
+          path.write_text(text, encoding="utf-8")
+
+          print("Patched target:")
+          print("SPI:", spi)
+          print("CS:", cs)
+          PY
+
+          grep -n -E "ICM42605|SPL06|HMC5883|SPI_BUS|CS_PIN|ALIGN" src/main/target/${TARGET}/target.h || true
+
+      - name: Patch ICM42605 driver to accept ICM40609 WHO_AM_I
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/drivers/accgyro/accgyro_icm42605.c")
+
+          if not path.exists():
+              raise SystemExit("accgyro_icm42605.c not found")
+
+          text = path.read_text(encoding="utf-8")
+
+          # Добавляем флаг, чтобы потом отличать ICM40609
+          if "static bool is40609" not in text:
+              text = text.replace(
+                  "static bool is42688P = false;",
+                  "static bool is42688P = false;\nstatic bool is40609 = false;",
+                  1
+              )
+
+          # Для ICM40609 при ±32g масштаб около 1024 LSB/g.
+          text = text.replace(
+              "acc->acc_1G = 512 * 4;",
+              "acc->acc_1G = is40609 ? 1024 : (512 * 4);",
+              1
+          )
+
+          # Максимально простой и грубый патч detect:
+          # если WHO_AM_I = 0x3B, считаем что датчик найден.
+          if "RUNA_ICM40609_WHOAMI" not in text:
+              text = text.replace(
+                  "#define ICM42605_WHO_AM_I_CONST",
+                  "#define RUNA_ICM40609_WHOAMI 0x3B\n#define ICM42605_WHO_AM_I_CONST",
+                  1
+              )
+
+          # Вставляем case 0x3B в switch WHO_AM_I.
+          if "case RUNA_ICM40609_WHOAMI:" not in text:
+              text = text.replace(
+                  "case ICM42605_WHO_AM_I_CONST:",
+                  "case RUNA_ICM40609_WHOAMI:\n            is40609 = true;\n            is42688P = false;\n            return true;\n        case ICM42605_WHO_AM_I_CONST:",
+                  1
+              )
+
+          path.write_text(text, encoding="utf-8")
+
+          print("ICM42605 driver patched for ICM40609 WHO_AM_I 0x3B")
+          print("Patch check:")
+          for line in text.splitlines():
+              if "40609" in line or "0x3B" in line or "acc_1G" in line:
+                  print(line)
+          PY
+
+      - name: Patch startup OSD text
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/io/osd.c")
+          text = path.read_text(encoding="utf-8")
+
+          old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
+          new = 'tfp_sprintf(string_buffer, "RUNA51 TEST");'
+
+          if old in text:
+              text = text.replace(old, new, 1)
+              text = text.replace(
+                  'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
+                  'uint8_t xPos = OSD_CENTER_S(string_buffer);',
+                  1
+              )
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Configure CMake
+        run: |
+          cd inav
+          mkdir -p build
+          cd build
+          cmake ..
+
+      - name: Build firmware
+        run: |
+          cd inav/build
+          make clean_${TARGET} || true
+          make ${TARGET} -j2 VERBOSE=1
+
+      - name: Patch RUNA name in HEX and BIN
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+
+          old = os.environ["OLD_TARGET_NAME"].encode()
+          new = os.environ["NEW_TARGET_NAME"].encode()
+          target = os.environ["TARGET"]
+          variant = "${{ matrix.name }}"
+
+          if len(old) != len(new):
+              raise SystemExit("Length mismatch")
+
+          out = Path("out")
+          out.mkdir(exist_ok=True)
+
+          hex_files = list(Path("inav/build").rglob(f"*{target}*.hex"))
+          if not hex_files:
+              hex_files = list(Path("inav/build").rglob("*.hex"))
+          if not hex_files:
+              raise SystemExit("No HEX found")
+
+          src_hex = hex_files[0]
+          records = []
+          memory = {}
+          base = 0
+
+          def parse_record(line):
+              count = int(line[1:3], 16)
+              addr = int(line[3:7], 16)
+              rectype = int(line[7:9], 16)
+              data = bytes.fromhex(line[9:9 + count * 2])
+              return count, addr, rectype, data
+
+          for line in src_hex.read_text().splitlines():
+              if not line.startswith(":"):
+                  records.append((line, None))
+                  continue
+
+              count, addr, rectype, data = parse_record(line)
+              records.append((line, (count, addr, rectype, data, base)))
+
+              if rectype == 0:
+                  absolute = base + addr
+                  for i, b in enumerate(data):
+                      memory[absolute + i] = b
+              elif rectype == 4:
+                  base = int.from_bytes(data, "big") << 16
+              elif rectype == 2:
+                  base = int.from_bytes(data, "big") << 4
+
+          if not memory:
+              raise SystemExit("No HEX memory data")
+
+          min_addr = min(memory)
+          max_addr = max(memory)
+          image = bytearray([0xFF] * (max_addr - min_addr + 1))
+
+          for addr, b in memory.items():
+              image[addr - min_addr] = b
+
+          positions = []
+          start = 0
+
+          while True:
+              pos = image.find(old, start)
+              if pos < 0:
+                  break
+              positions.append(pos)
+              start = pos + 1
+
+          for pos in positions:
+              abs_pos = min_addr + pos
+              for i, b in enumerate(new):
+                  memory[abs_pos + i] = b
+
+          def checksum(record_bytes):
+              return ((~sum(record_bytes) + 1) & 0xFF)
+
+          patched_lines = []
+
+          for line, info in records:
+              if info is None:
+                  patched_lines.append(line)
+                  continue
+
+              count, addr, rectype, data, rec_base = info
+
+              if rectype == 0:
+                  absolute = rec_base + addr
+                  new_data = bytes(memory[absolute + i] for i in range(count))
+
+                  rec = bytearray()
+                  rec.append(count)
+                  rec.append((addr >> 8) & 0xFF)
+                  rec.append(addr & 0xFF)
+                  rec.append(rectype)
+                  rec.extend(new_data)
+                  chk = checksum(rec)
+
+                  patched_lines.append(":" + rec.hex().upper() + f"{chk:02X}")
+              else:
+                  patched_lines.append(line)
+
+          dst_hex = out / f"RUNA_FC51_ICM40609_SCAN_{variant}.hex"
+          dst_hex.write_text("\n".join(patched_lines) + "\n")
+          print("Written:", dst_hex)
+
+          bin_files = list(Path("inav/build").rglob(f"*{target}*.bin"))
+          if not bin_files:
+              bin_files = list(Path("inav/build").rglob("*.bin"))
+
+          for src_bin in bin_files:
+              data = src_bin.read_bytes()
+              if old in data:
+                  patched = data.replace(old, new)
+                  dst_bin = out / f"RUNA_FC51_ICM40609_SCAN_{variant}.bin"
+                  dst_bin.write_bytes(patched)
+                  print("Written:", dst_bin)
+                  break
+          PY
+
+      - name: Create test CLI
+        run: |
+          mkdir -p out
+
+          cat > out/RUNA_FC51_SCAN_${{ matrix.name }}.cli <<'EOF'
+          batch start
+
+          # RUNA FC51 ICM40609 scan test
+          # Use ICM42605 because driver is patched to accept ICM40609 WHO_AM_I=0x3B
+
+          set acc_hardware = ICM42605
+          set baro_hardware = SPL06
+          set mag_hardware = HMC5883
+          set align_mag = CW0FLIP
+
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 1800
+
+          set gyro_zero_x = 0
+          set gyro_zero_y = 0
+          set gyro_zero_z = 0
+
+          set acczero_x = 0
+          set acczero_y = 0
+          set acczero_z = 0
+
+          set accgain_x = 4096
+          set accgain_y = 4096
+          set accgain_z = 4096
+
+          set vbat_adc_channel = 1
+          set rssi_adc_channel = 4
+          set current_adc_channel = 2
+          set airspeed_adc_channel = 3
+
+          save
+          EOF
+
+          cat > out/README_${{ matrix.name }}.txt <<'EOF'
+          RUNA FC51 ICM40609 CS/SPI scan test
+
+          Variant:
+          SPI = ${{ matrix.spi }}
+          CS  = ${{ matrix.cs }}
+
+          Flash this HEX:
+          RUNA_FC51_ICM40609_SCAN_${{ matrix.name }}.hex
+
+          After flashing:
+          1. CLI:
+             defaults
+             save
+
+          2. Wait 15 seconds without touching board.
+
+          3. Apply:
+             RUNA_FC51_SCAN_${{ matrix.name }}.cli
+
+          4. Check:
+             status
+
+          Good result:
+          GYRO=OK
+          ACC=OK
+          BARO=OK
+          MAG=OK
+
+          Bad result:
+          GYRO=UNAVAILABLE
+          ACC=UNAVAILABLE
+
+          Test without propeller.
+          EOF
+
+          ls -lah out
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: RUNA-FC51-SCAN-${{ matrix.name }}
+          path: out/*
