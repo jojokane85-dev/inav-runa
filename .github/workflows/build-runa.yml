@@ -1,4 +1,4 @@
-name: Build RUNA FC51 SAFE
+name: Build RUNA FC51 ICM40609
 
 on:
   workflow_dispatch:
@@ -62,6 +62,118 @@ jobs:
           cd inav
           echo "Commit:"
           git rev-parse HEAD
+
+      - name: Check ICM40609 source support
+        run: |
+          cd inav
+
+          echo "Searching ICM40609 support in source..."
+          grep -R "ICM40609" -n src/main || {
+            echo "ERROR: ICM40609 is not present in this INAV source tree."
+            echo "This means official INAV 7.1.2 does not contain the needed custom driver."
+            echo "In that case use working fw.bin patch method or find custom source commit 21449e25."
+            exit 1
+          }
+
+      - name: Patch SPEEDYBEEF405WING target to ICM40609
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          import os
+
+          target = os.environ["TARGET"]
+          path = Path(f"src/main/target/{target}/target.h")
+
+          if not path.exists():
+              raise SystemExit(f"target.h not found: {path}")
+
+          text = path.read_text(encoding="utf-8")
+
+          def find_define(name, default=None):
+              m = re.search(rf'^\s*#define\s+{re.escape(name)}\s+(\S+)', text, flags=re.M)
+              return m.group(1) if m else default
+
+          # Берём SPI/CS/ALIGN от штатного IMU SpeedyBee.
+          # На FC 5.1 рабочий diff показывает ICM40609, но пины обычно такие же,
+          # как у штатного ICM42605/ICM42688 в этом target.
+          spi_bus = (
+              find_define("ICM42605_SPI_BUS") or
+              find_define("ICM42688P_SPI_BUS") or
+              find_define("ICM40609_SPI_BUS") or
+              "BUS_SPI1"
+          )
+
+          cs_pin = (
+              find_define("ICM42605_CS_PIN") or
+              find_define("ICM42688P_CS_PIN") or
+              find_define("ICM40609_CS_PIN") or
+              "PA4"
+          )
+
+          align = (
+              find_define("IMU_ICM42605_ALIGN") or
+              find_define("IMU_ICM42688P_ALIGN") or
+              find_define("IMU_ICM40609_ALIGN") or
+              "CW0_DEG"
+          )
+
+          print("Using for ICM40609:")
+          print(" SPI =", spi_bus)
+          print(" CS  =", cs_pin)
+          print(" ALIGN =", align)
+
+          # Убираем другие IMU, чтобы сборка была чисто под ICM40609.
+          remove_patterns = [
+              r'^\s*#define\s+USE_IMU_ICM42605\s*$',
+              r'^\s*#define\s+IMU_ICM42605_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42605_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42605_SPI_BUS\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_ICM42688P\s*$',
+              r'^\s*#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42688P_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42688P_SPI_BUS\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_ICM40609\s*$',
+              r'^\s*#define\s+IMU_ICM40609_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+ICM40609_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+ICM40609_SPI_BUS\s+\S+\s*$',
+          ]
+
+          for pattern in remove_patterns:
+              text = re.sub(pattern, "", text, flags=re.M)
+
+          text += f"""
+
+          /*
+           * RUNA FC 5.1 custom IMU patch
+           * Working FC5.1 diff:
+           * acc_hardware = ICM40609
+           * baro_hardware = SPL06
+           * mag_hardware = HMC5883
+           */
+
+          #define USE_IMU_ICM40609
+          #define ICM40609_SPI_BUS {spi_bus}
+          #define ICM40609_CS_PIN {cs_pin}
+          #define IMU_ICM40609_ALIGN {align}
+
+          #define USE_BARO_SPL06
+          #define BARO_I2C_BUS BUS_I2C1
+
+          #define USE_MAG_HMC5883
+          #define MAG_I2C_BUS BUS_I2C1
+          """
+
+          path.write_text(text, encoding="utf-8")
+          print("target.h patched for ICM40609")
+          PY
+
+          echo "===== Patched target.h important lines ====="
+          grep -n -E "ICM40609|ICM42605|ICM42688|SPL06|HMC5883|MAG_I2C|BARO_I2C|SPI_BUS|CS_PIN|ALIGN" src/main/target/${TARGET}/target.h || true
 
       - name: Patch startup OSD text RUNAv.51
         run: |
@@ -299,7 +411,7 @@ jobs:
             exit 1
           fi
 
-      - name: Build SPEEDYBEEF405WING firmware
+      - name: Build SPEEDYBEEF405WING ICM40609 firmware
         run: |
           cd inav/build
           make clean_${TARGET} || true
@@ -330,9 +442,6 @@ jobs:
           out = Path("out")
           out.mkdir(exist_ok=True)
 
-          # -------------------------
-          # Patch HEX
-          # -------------------------
           hex_files = list(Path("inav/build").rglob(f"*{target}*.hex"))
 
           if not hex_files:
@@ -429,13 +538,10 @@ jobs:
               else:
                   patched_lines.append(line)
 
-          dst_hex = out / "RUNA_FC51_SAFE.hex"
+          dst_hex = out / "RUNA_FC51_ICM40609.hex"
           dst_hex.write_text("\n".join(patched_lines) + "\n")
           print("Patched HEX written:", dst_hex)
 
-          # -------------------------
-          # Patch BIN
-          # -------------------------
           bin_files = list(Path("inav/build").rglob(f"*{target}*.bin"))
 
           if not bin_files:
@@ -447,15 +553,14 @@ jobs:
 
               if count:
                   patched = data.replace(old, new)
-                  dst_bin = out / "RUNA_FC51_SAFE.bin"
+                  dst_bin = out / "RUNA_FC51_ICM40609.bin"
                   dst_bin.write_bytes(patched)
                   print("Patched BIN written:", dst_bin, "replacements:", count)
                   break
 
-          # Copy ELF if exists
           elf_files = list(Path("inav/build").rglob(f"*{target}*.elf"))
           if elf_files:
-              dst_elf = out / "RUNA_FC51_SAFE.elf"
+              dst_elf = out / "RUNA_FC51_ICM40609.elf"
               dst_elf.write_bytes(elf_files[0].read_bytes())
               print("ELF copied:", dst_elf)
           PY
@@ -464,17 +569,16 @@ jobs:
         run: |
           mkdir -p out
 
-          cat > out/RUNA_FC51_BASE_SETUP.cli <<'EOF'
+          cat > out/RUNA_FC51_ICM40609_BASE_SETUP.cli <<'EOF'
           batch start
 
-          # RUNA FC 5.1 base setup
-          # From FC 5.1 dump:
-          # ACC/GYRO: ICM42605
+          # RUNA FC 5.1 base setup from working FC5.1 diff
+          # ACC/GYRO: ICM40609
           # BARO: SPL06
           # MAG: HMC5883
           # Board yaw: 1800
 
-          set acc_hardware = ICM42605
+          set acc_hardware = ICM40609
           set baro_hardware = SPL06
           set mag_hardware = HMC5883
           set align_mag = CW0FLIP
@@ -483,17 +587,15 @@ jobs:
           set align_board_pitch = 0
           set align_board_yaw = 1800
 
-          set gyro_zero_x = 0
-          set gyro_zero_y = 0
-          set gyro_zero_z = 0
+          set gyro_zero_x = 19
+          set gyro_zero_y = -2
+          set gyro_zero_z = 1
 
-          set acczero_x = 0
-          set acczero_y = 0
-          set acczero_z = 0
-
-          set accgain_x = 4096
-          set accgain_y = 4096
-          set accgain_z = 4096
+          set acczero_y = -2
+          set acczero_z = 20
+          set accgain_x = 4091
+          set accgain_y = 4093
+          set accgain_z = 4094
 
           set vbat_adc_channel = 1
           set rssi_adc_channel = 4
@@ -581,46 +683,43 @@ jobs:
           save
           EOF
 
-          cat > out/README_RUNA_FC51_SAFE.txt <<'EOF'
-          RUNA FC51 SAFE firmware
+          cat > out/README_RUNA_FC51_ICM40609.txt <<'EOF'
+          RUNA FC51 ICM40609 firmware
 
-          IMPORTANT:
-          This build does NOT create a new target.
-          It builds original SPEEDYBEEF405WING and then patches the name in HEX/BIN.
-
-          Base:
+          Built from:
           - INAV 7.1.2
-          - Real target: SPEEDYBEEF405WING
-          - Display name after patch: SPEEDYBEE51+RUNA!
+          - Target: SPEEDYBEEF405WING
+          - Patched display name: SPEEDYBEE51+RUNA!
 
-          FC 5.1 dump hardware:
-          - ACC/GYRO: ICM42605
-          - BARO: SPL06
-          - MAG: HMC5883
-          - align_mag: CW0FLIP
-          - align_board_yaw: 1800
+          FC 5.1 working diff says:
+          - acc_hardware = ICM40609
+          - baro_hardware = SPL06
+          - mag_hardware = HMC5883
+          - align_mag = CW0FLIP
+          - align_board_yaw = 1800
 
           Added:
-          - Startup OSD text: RUNAv.51
+          - RUNAv.51 startup OSD text
           - RUNA OSD shutter on Layout 2
-          - VTX 3.3GHz table in FREQUENCYGROUP_1G3
+          - VTX 3.3GHz table
           - VTX 5.8 switching preset:
             CH6 LOW  = 5820 MHz
             CH6 MID  = 5695 MHz
             CH6 HIGH = 5733 MHz
 
           Flash:
-          1. Use INAV Configurator 7.x
-          2. Full Chip Erase
-          3. Flash RUNA_FC51_SAFE.hex
-          4. CLI:
+          1. INAV Configurator 7.x
+          2. DFU mode
+          3. Full Chip Erase
+          4. Flash RUNA_FC51_ICM40609.hex
+          5. CLI:
              defaults
              save
 
-          5. Wait 15 seconds without touching board.
-          6. Apply RUNA_FC51_BASE_SETUP.cli
-          7. Calibrate accelerometer
-          8. Check:
+          6. Wait 15 seconds without touching board.
+          7. Apply RUNA_FC51_ICM40609_BASE_SETUP.cli
+          8. Calibrate accelerometer.
+          9. Check:
              status
              get align_board
 
@@ -630,12 +729,11 @@ jobs:
           - BARO=OK
           - MAG=OK
           - HWFAIL absent
+          - align_board_yaw = 1800
 
-          If GYRO/ACC are UNAVAILABLE:
-          do not fly and return to working FC5.1 firmware/dump.
-
-          After sensors are OK:
-          apply Dump5.1.txt carefully and re-check align_board_yaw = 1800.
+          If Actions fail on ICM40609 source support:
+          official INAV source does not contain this custom driver.
+          Then use working fw.bin patch method or find custom source commit 21449e25.
 
           Test without propeller.
           EOF
@@ -646,5 +744,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC51-SAFE
+          name: RUNA-FC51-ICM40609
           path: out/*
