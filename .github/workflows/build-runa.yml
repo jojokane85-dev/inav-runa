@@ -1,4 +1,4 @@
-name: Build RUNA FC51 FINAL
+name: Build RUNA FC45 FINAL
 
 on:
   workflow_dispatch:
@@ -10,11 +10,9 @@ jobs:
 
     env:
       INAV_VERSION: 7.1.2
-      TARGET: SPEEDYBEEF405WING
-
-      OLD_TARGET_NAME: SPEEDYBEEF405WING
-      NEW_TARGET_NAME: SPEEDYBEE51+RUNA!
-
+      BASE_TARGET: SPEEDYBEEF405WING
+      TARGET: CADDXF405_WING
+      RUNA_NAME: CADDX45+RUNA
       RUNA_SPI_BUS: BUS_SPI1
       RUNA_CS_PIN: PA4
 
@@ -61,7 +59,21 @@ jobs:
           cd inav
           git rev-parse HEAD
 
-      - name: Patch target for RUNA FC51 hardware
+      - name: Create CADDXF405_WING target
+        run: |
+          cd inav
+
+          rm -rf src/main/target/${TARGET}
+          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
+
+          if [ -f "src/main/target/${TARGET}/CMakeLists.txt" ]; then
+            sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
+          fi
+
+          echo "Created target ${TARGET} from ${BASE_TARGET}"
+          ls -la src/main/target/${TARGET}
+
+      - name: Patch target for RUNA FC45 hardware
         run: |
           cd inav
 
@@ -81,6 +93,7 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
+          # Убираем старые IMU / BARO / MAG define, чтобы оставить чистую FC4.5 связку.
           remove_patterns = [
               r'^\s*#define\s+USE_IMU_ICM42605\s*$',
               r'^\s*#define\s+IMU_ICM42605_ALIGN\s+\S+\s*$',
@@ -100,15 +113,15 @@ jobs:
               r'^\s*#define\s+IMU_BMI270_ALIGN\s+\S+\s*$',
               r'^\s*#define\s+BMI270_EXTI_PIN\s+\S+\s*$',
 
-              r'^\s*#define\s+USE_IMU_LSM6DXX\s*$',
-              r'^\s*#define\s+LSM6DXX_CS_PIN\s+\S+\s*$',
-              r'^\s*#define\s+LSM6DXX_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*$',
-
               r'^\s*#define\s+USE_IMU_MPU6000\s*$',
               r'^\s*#define\s+MPU6000_CS_PIN\s+\S+\s*$',
               r'^\s*#define\s+MPU6000_SPI_BUS\s+\S+\s*$',
               r'^\s*#define\s+IMU_MPU6000_ALIGN\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_LSM6DXX\s*$',
+              r'^\s*#define\s+LSM6DXX_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+LSM6DXX_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*$',
 
               r'^\s*#define\s+USE_BARO_SPL06\s*$',
               r'^\s*#define\s+BARO_I2C_BUS\s+\S+\s*$',
@@ -124,21 +137,21 @@ jobs:
           text += f"""
 
           /*
-           * RUNA FC5.1 FINAL hardware patch
+           * RUNA FC4.5 FINAL hardware patch
            *
-           * Working result:
-           * GYRO/ACC OK through ICM42605 driver with ICM40609 WHO_AM_I 0x3B
-           * SPI = {spi}
-           * CS  = {cs}
+           * Working FC4.5 dump:
+           * target = CADDXF405_WING
+           * ACC/GYRO = LSM6DXX
            * BARO = SPL06
-           * MAG  = HMC5883
-           * align_board_yaw = 900 in CLI
+           * MAG = HMC5883
+           * align_mag = CW0FLIP
+           * align_board_yaw = 1800 in CLI
            */
 
-          #define USE_IMU_ICM42605
-          #define ICM42605_SPI_BUS {spi}
-          #define ICM42605_CS_PIN {cs}
-          #define IMU_ICM42605_ALIGN CW0_DEG
+          #define USE_IMU_LSM6DXX
+          #define LSM6DXX_SPI_BUS {spi}
+          #define LSM6DXX_CS_PIN {cs}
+          #define IMU_LSM6DXX_ALIGN CW0_DEG
 
           #define USE_BARO_SPL06
           #define BARO_I2C_BUS BUS_I2C1
@@ -155,44 +168,107 @@ jobs:
           PY
 
           echo "===== Patched target.h lines ====="
-          grep -n -E "ICM42605|SPL06|HMC5883|SPI_BUS|CS_PIN|ALIGN|BARO_I2C|MAG_I2C" src/main/target/${TARGET}/target.h || true
+          grep -n -E "LSM6DXX|SPL06|HMC5883|SPI_BUS|CS_PIN|ALIGN|BARO_I2C|MAG_I2C" src/main/target/${TARGET}/target.h || true
 
-      - name: Patch ICM42605 driver to accept ICM40609 WHOAMI
+      - name: Patch LSM6DXX robust detect
         run: |
           cd inav
 
           python3 <<'PY'
           from pathlib import Path
 
-          path = Path("src/main/drivers/accgyro/accgyro_icm42605.c")
+          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
 
           if not path.exists():
-              raise SystemExit("accgyro_icm42605.c not found")
+              print("accgyro_lsm6dxx.c not found, skip")
+              raise SystemExit(0)
 
           text = path.read_text(encoding="utf-8")
 
-          text = text.replace("#define RUNA_ICM40609_WHOAMI 0x3B\n", "")
-          text = text.replace("case RUNA_ICM40609_WHOAMI:", "case 0x3B:")
+          sig = "static bool lsm6dxxDetect"
 
-          if "case 0x3B:" not in text:
-              if "case ICM42605_WHO_AM_I_CONST:" not in text:
-                  raise SystemExit("Could not find case ICM42605_WHO_AM_I_CONST")
+          start = text.find(sig)
 
-              text = text.replace(
-                  "case ICM42605_WHO_AM_I_CONST:",
-                  "case 0x3B:\n            return true;\n        case ICM42605_WHO_AM_I_CONST:",
-                  1
-              )
+          if start == -1:
+              print("lsm6dxxDetect not found, skip")
+              raise SystemExit(0)
 
+          brace = text.find("{", start)
+          depth = 0
+          end = -1
+
+          for i in range(brace, len(text)):
+              if text[i] == "{":
+                  depth += 1
+              elif text[i] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+
+          if end == -1:
+              print("lsm6dxxDetect end not found, skip")
+              raise SystemExit(0)
+
+          repl = """static bool lsm6dxxDetect(busDevice_t * dev)
+          {
+              uint8_t tmp = 0;
+
+              busSetSpeed(dev, BUS_SPEED_INITIALIZATION);
+              delay(150);
+              busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);
+
+              /*
+               * RUNA FC4.5 robust LSM6DXX detection.
+               * Accept common LSM6DXX IDs.
+               */
+              if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
+                  lsm6dID = tmp;
+              } else {
+                  lsm6dID = LSM6DS3_CHIP_ID;
+              }
+
+              return true;
+          }"""
+
+          text = text[:start] + repl + text[end:]
           path.write_text(text, encoding="utf-8")
 
-          print("===== ICM40609 WHOAMI patch check =====")
-          for line in text.splitlines():
-              if "case 0x3B" in line or "ICM42605_WHO_AM_I_CONST" in line:
-                  print(line)
+          print("RUNA LSM6DXX detect patched")
           PY
 
-      - name: Patch startup OSD text RUNAv.51
+      - name: Patch RUNA name in MSP
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          import os
+
+          runa_name = os.environ["RUNA_NAME"]
+
+          path = Path("src/main/fc/fc_msp.c")
+
+          if not path.exists():
+              print("fc_msp.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
+
+          replacement = f'''const char *runaTargetName = "{runa_name}";
+                  sbufWriteU8(dst, strlen(runaTargetName));
+                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));'''
+
+          text, count = re.subn(pattern, replacement, text, count=1)
+
+          path.write_text(text, encoding="utf-8")
+          print("MSP RUNA name patch count:", count)
+          PY
+
+      - name: Patch startup OSD text RUNAv.45
         run: |
           cd inav
 
@@ -208,7 +284,7 @@ jobs:
           text = path.read_text(encoding="utf-8")
 
           old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
-          new = 'tfp_sprintf(string_buffer, "RUNAv.51");'
+          new = 'tfp_sprintf(string_buffer, "RUNAv.45");'
 
           if old in text:
               text = text.replace(old, new, 1)
@@ -217,7 +293,7 @@ jobs:
                   'uint8_t xPos = OSD_CENTER_S(string_buffer);',
                   1
               )
-              print("Startup OSD text patched: RUNAv.51")
+              print("Startup OSD text patched: RUNAv.45")
           else:
               print("WARNING: startup text pattern not found")
 
@@ -422,11 +498,11 @@ jobs:
             echo "Target found: ${TARGET}"
           else
             echo "TARGET NOT FOUND: ${TARGET}"
-            make help | grep -i -E "SPEEDYBEE|F405|WING" || true
+            make help | grep -i -E "CADDX|SPEEDYBEE|F405|WING|RUNA" || true
             exit 1
           fi
 
-      - name: Build RUNA FC51 FINAL firmware
+      - name: Build RUNA FC45 FINAL firmware
         run: |
           cd inav/build
           make clean_${TARGET} || true
@@ -438,207 +514,217 @@ jobs:
           echo "Built firmware files:"
           find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
 
-      - name: Patch RUNA name in HEX and BIN
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          import os
-
-          old = os.environ["OLD_TARGET_NAME"].encode()
-          new = os.environ["NEW_TARGET_NAME"].encode()
-          target = os.environ["TARGET"]
-
-          print("OLD:", os.environ["OLD_TARGET_NAME"], len(old))
-          print("NEW:", os.environ["NEW_TARGET_NAME"], len(new))
-
-          if len(old) != len(new):
-              raise SystemExit("Length mismatch")
-
-          out = Path("out")
-          out.mkdir(exist_ok=True)
-
-          hex_files = list(Path("inav/build").rglob(f"*{target}*.hex"))
-
-          if not hex_files:
-              hex_files = list(Path("inav/build").rglob("*.hex"))
-
-          if not hex_files:
-              raise SystemExit("No HEX found")
-
-          src_hex = hex_files[0]
-          print("Using HEX:", src_hex)
-
-          records = []
-          memory = {}
-          base = 0
-
-          def parse_record(line):
-              count = int(line[1:3], 16)
-              addr = int(line[3:7], 16)
-              rectype = int(line[7:9], 16)
-              data = bytes.fromhex(line[9:9 + count * 2])
-              return count, addr, rectype, data
-
-          for line in src_hex.read_text().splitlines():
-              if not line.startswith(":"):
-                  records.append((line, None))
-                  continue
-
-              count, addr, rectype, data = parse_record(line)
-              records.append((line, (count, addr, rectype, data, base)))
-
-              if rectype == 0:
-                  absolute = base + addr
-                  for i, b in enumerate(data):
-                      memory[absolute + i] = b
-              elif rectype == 4:
-                  base = int.from_bytes(data, "big") << 16
-              elif rectype == 2:
-                  base = int.from_bytes(data, "big") << 4
-
-          if not memory:
-              raise SystemExit("No HEX memory data")
-
-          min_addr = min(memory)
-          max_addr = max(memory)
-          image = bytearray([0xFF] * (max_addr - min_addr + 1))
-
-          for addr, b in memory.items():
-              image[addr - min_addr] = b
-
-          positions = []
-          start = 0
-
-          while True:
-              pos = image.find(old, start)
-              if pos < 0:
-                  break
-              positions.append(pos)
-              start = pos + 1
-
-          print("Target name occurrences in HEX:", len(positions))
-
-          for pos in positions:
-              abs_pos = min_addr + pos
-              print("Patching HEX at", hex(abs_pos))
-              for i, b in enumerate(new):
-                  memory[abs_pos + i] = b
-
-          def checksum(record_bytes):
-              return ((~sum(record_bytes) + 1) & 0xFF)
-
-          patched_lines = []
-
-          for line, info in records:
-              if info is None:
-                  patched_lines.append(line)
-                  continue
-
-              count, addr, rectype, data, rec_base = info
-
-              if rectype == 0:
-                  absolute = rec_base + addr
-                  new_data = bytes(memory[absolute + i] for i in range(count))
-
-                  rec = bytearray()
-                  rec.append(count)
-                  rec.append((addr >> 8) & 0xFF)
-                  rec.append(addr & 0xFF)
-                  rec.append(rectype)
-                  rec.extend(new_data)
-                  chk = checksum(rec)
-
-                  patched_lines.append(":" + rec.hex().upper() + f"{chk:02X}")
-              else:
-                  patched_lines.append(line)
-
-          dst_hex = out / "RUNA_FC51_FINAL.hex"
-          dst_hex.write_text("\n".join(patched_lines) + "\n")
-          print("Written HEX:", dst_hex)
-
-          bin_files = list(Path("inav/build").rglob(f"*{target}*.bin"))
-
-          if not bin_files:
-              bin_files = list(Path("inav/build").rglob("*.bin"))
-
-          for src_bin in bin_files:
-              data = src_bin.read_bytes()
-              count = data.count(old)
-
-              if count:
-                  patched = data.replace(old, new)
-                  dst_bin = out / "RUNA_FC51_FINAL.bin"
-                  dst_bin.write_bytes(patched)
-                  print("Written BIN:", dst_bin, "replacements:", count)
-                  break
-
-          elf_files = list(Path("inav/build").rglob(f"*{target}*.elf"))
-          if elf_files:
-              dst_elf = out / "RUNA_FC51_FINAL.elf"
-              dst_elf.write_bytes(elf_files[0].read_bytes())
-              print("ELF copied:", dst_elf)
-          PY
-
-      - name: Create RUNA FC51 CLI files
+      - name: Collect firmware and CLI files
         run: |
           mkdir -p out
 
-          cat > out/RUNA_FC51_FINAL_BASE.cli <<'EOF'
+          FOUND=0
+
+          while IFS= read -r f; do
+            base="$(basename "$f")"
+            dst="out/RUNA_FC45_FINAL_${base}"
+            cp "$f" "$dst"
+            echo "Copied: $dst"
+            FOUND=$((FOUND + 1))
+          done < <(find inav/build -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
+
+          if [ "$FOUND" -eq 0 ]; then
+            echo "ERROR: no firmware files found"
+            find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+            exit 1
+          fi
+
+          cat > out/RUNA_FC45_FINAL_BASE_NO_GPS.cli <<'EOF'
           batch start
 
-          # RUNA FC51 FINAL BASE
-          # Working hardware:
-          # GYRO/ACC OK through ICM42605 driver + ICM40609 WHOAMI 0x3B
-          # SPI1 / PA4
-          # BARO SPL06
-          # MAG HMC5883
-          # Correct axes: align_board_yaw = 900
+          # RUNA FC4.5 FINAL BASE NO GPS
+          # Working dump:
+          # Target: CADDXF405_WING
+          # ACC/GYRO: LSM6DXX
+          # BARO: SPL06
+          # MAG: HMC5883
+          # align_board_yaw: 1800
 
-          set acc_hardware = ICM42605
-          set baro_hardware = SPL06
-          set mag_hardware = HMC5883
-          set align_mag = CW0FLIP
+          servo 1 850 2150 1670 -125
+          servo 2 1000 2000 1500 -110
+          servo 3 1000 2000 1500 -110
+          servo 4 1000 2000 1200 100
+          servo 5 1000 2000 1200 100
 
-          set align_board_roll = 0
-          set align_board_pitch = 0
-          set align_board_yaw = 900
+          feature MOTOR_STOP
+          feature PWM_OUTPUT_ENABLE
+          feature FW_AUTOTRIM
+          feature OSD
+          feature TELEMETRY
+          feature CURRENT_METER
+          feature BLACKBOX
+          feature VTX
+          feature -GPS
+
+          serial 1 2 115200 115200 0 115200
+          serial 4 4096 115200 115200 0 115200
+
+          aux 0 0 0 1500 2100
+          aux 1 1 2 900 1300
+          aux 2 3 2 1300 1700
+          aux 3 5 2 1300 1700
+          aux 4 35 2 1300 1700
+          aux 5 36 2 900 1300
+          aux 6 42 3 1700 2100
+          aux 7 47 0 900 2100
+          aux 8 48 3 1700 2100
+          aux 9 57 3 1700 2100
+
+          set gyro_main_lpf_hz = 25
+          set dynamic_gyro_notch_q = 250
+          set dynamic_gyro_notch_min_hz = 30
 
           set gyro_zero_x = 0
           set gyro_zero_y = 0
           set gyro_zero_z = 0
 
+          set acc_hardware = LSM6DXX
           set acczero_x = 0
           set acczero_y = 0
           set acczero_z = 0
-
           set accgain_x = 4096
           set accgain_y = 4096
           set accgain_z = 4096
+
+          set baro_hardware = SPL06
+
+          set mag_hardware = HMC5883
+          set align_mag = CW0FLIP
+          set align_mag_roll = 0
+          set align_mag_pitch = 0
+          set align_mag_yaw = 0
+          set magzero_x = -143
+          set magzero_y = -757
+          set magzero_z = -298
+          set maggain_x = 2219
+          set maggain_y = 1888
+          set maggain_z = 1568
+
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 1800
 
           set vbat_adc_channel = 1
           set rssi_adc_channel = 4
           set current_adc_channel = 2
           set airspeed_adc_channel = 3
 
+          set receiver_type = SERIAL
+          set serialrx_provider = CRSF
+          set rc_filter_auto = OFF
+          set deadband = 32
+
+          set max_throttle = 2000
+          set motor_pwm_protocol = STANDARD
+          set failsafe_procedure = NONE
+          set current_meter_scale = 160
+          set small_angle = 180
+          set disarm_kill_switch = OFF
+          set applied_defaults = 3
+
+          # No GPS flying
+          set gps_auto_config = OFF
+          set gps_auto_baud = OFF
+          set gps_min_sats = 0
+          set nav_extra_arming_safety = OFF
+          set nav_rth_allow_landing = NEVER
+
+          set airmode_type = STICK_CENTER_ONCE
+          set inav_w_z_baro_p =  0.350
+
+          set nav_wp_radius = 5000
+          set nav_wp_max_safe_distance = 500
+          set nav_rth_altitude = 5000
+          set nav_fw_climb_angle = 12
+          set nav_fw_control_smoothness = 2
+          set nav_fw_launch_motor_delay = 1
+          set nav_fw_launch_spinup_time = 250
+          set nav_fw_launch_end_time = 5000
+          set nav_fw_launch_timeout = 50000
+          set nav_fw_launch_max_altitude = 5000
+          set nav_fw_launch_climb_angle = 15
+
+          set pilot_name = FIRE!!!
+          set pinio_box1 = 47
+          set pinio_box2 = 255
+          set pinio_box3 = 57
+          set pinio_box4 = 255
+
+          mixer_profile 1
+
+          set platform_type = AIRPLANE
+          set has_flaps = ON
+          set model_preview_type = 26
+
+          mmix reset
+          mmix 0  1.000  0.000  0.000 -0.500
+          mmix 1  1.000  0.000  0.000  0.500
+
+          smix reset
+          smix 0 1 1 100 0 -1
+          smix 1 2 0 100 0 -1
+          smix 2 3 0 100 0 -1
+          smix 3 4 11 100 0 -1
+
+          profile 1
+
+          set fw_p_pitch = 15
+          set fw_i_pitch = 5
+          set fw_d_pitch = 5
+          set fw_ff_pitch = 80
+          set fw_p_roll = 15
+          set fw_i_roll = 3
+          set max_angle_inclination_rll = 450
+          set dterm_lpf_hz = 10
+          set fw_turn_assist_yaw_gain =  2.000
+          set fw_turn_assist_pitch_gain =  0.600
+          set nav_fw_pos_z_p = 25
+          set nav_fw_pos_z_d = 8
+          set nav_fw_pos_xy_p = 55
+          set d_boost_min =  1.000
+          set d_boost_max =  1.000
+          set rc_expo = 30
+          set rc_yaw_expo = 30
+          set roll_rate = 18
+          set pitch_rate = 9
+          set yaw_rate = 3
+
+          battery_profile 1
+
+          set bat_cells = 6
+          set vbat_cell_detect_voltage = 435
+          set vbat_max_cell_voltage = 435
+          set throttle_idle =  5.000
+          set nav_mc_hover_thr = 1600
+          set nav_fw_cruise_thr = 1650
+          set nav_fw_min_thr = 1550
+          set nav_fw_max_thr = 1800
+          set nav_fw_pitch2thr = 6
+          set nav_fw_launch_thr = 2000
+          set nav_fw_launch_idle_thr = 1750
+          set limit_cont_current = 1470
+          set limit_burst_current = 1520
+          set limit_burst_current_time = 2000
+          set limit_burst_current_falldown_time = 3000
+
+          mixer_profile 1
+          profile 1
+          battery_profile 1
+
           save
           EOF
 
-          cat > out/RUNA_FC51_VTX_5G8_5820_5695_5733.cli <<'EOF'
+          cat > out/RUNA_FC45_VTX_5G8_5820_5695_5733.cli <<'EOF'
           batch start
-
-          # RUNA FC51 VTX 5.8 GHz
-          # VTX: IRC Tramp
-          # Port: UART5 / TX5
-          # AUX2 = CH6
-          #
-          # CH6 LOW  -> 5820 MHz = FATSHARK F5
-          # CH6 MID  -> 5695 MHz = RACEBAND R2
-          # CH6 HIGH -> 5733 MHz = BAND B B1
 
           feature VTX
 
           # UART5 / TX5 -> IRC Tramp
-          # serial 4 = UART5
           serial 4 4096 115200 115200 0 115200
 
           set vtx_frequency_group = FREQUENCYGROUP_5G8
@@ -647,14 +733,18 @@ jobs:
           set vtx_band = 4
           set vtx_channel = 5
 
-          # Armed power = 5
-          # Disarmed low power = ON
+          # Power 5 when armed, low power on disarm
           set vtx_power = 5
           set vtx_low_power_disarm = ON
           set vtx_pit_mode_chan = 1
           set vtx_max_power_override = 0
 
-          # Clear old VTX logic 0-8
+          set vtx_halfduplex = ON
+          set vtx_smartaudio_early_akk_workaround = ON
+          set vtx_smartaudio_alternate_softserial_method = ON
+          set vtx_softserial_shortstop = OFF
+          set vtx_smartaudio_stopbits = 2
+
           logic 0 0 -1 0 0 0 0 0 0
           logic 1 0 -1 0 0 0 0 0 0
           logic 2 0 -1 0 0 0 0 0 0
@@ -670,22 +760,22 @@ jobs:
           logic 1 1 -1 5 1 6 0 0 0
           logic 2 1 -1 6 1 6 0 0 0
 
-          # LOW -> FATSHARK F5 / 5820 MHz
+          # LOW -> 5820 MHz = FatShark F5
           logic 3 1 0 30 0 4 0 0 0
           logic 4 1 0 31 0 5 0 0 0
 
-          # MID -> RACEBAND R2 / 5695 MHz
+          # MID -> 5695 MHz = RaceBand R2
           logic 5 1 1 30 0 5 0 0 0
           logic 6 1 1 31 0 2 0 0 0
 
-          # HIGH -> BAND B B1 / 5733 MHz
+          # HIGH -> 5733 MHz = Band B CH1
           logic 7 1 2 30 0 2 0 0 0
           logic 8 1 2 31 0 1 0 0 0
 
           save
           EOF
 
-          cat > out/RUNA_FC51_VTX_3G3.cli <<'EOF'
+          cat > out/RUNA_FC45_VTX_3G3.cli <<'EOF'
           batch start
 
           feature VTX
@@ -704,38 +794,37 @@ jobs:
           save
           EOF
 
-          cat > out/README_RUNA_FC51_FINAL.txt <<'EOF'
-          RUNA FC51 FINAL
+          cat > out/README_RUNA_FC45_FINAL.txt <<'EOF'
+          RUNA FC45 FINAL
 
           Base:
           - INAV 7.1.2
-          - Real target: SPEEDYBEEF405WING
-          - Display name patched to: SPEEDYBEE51+RUNA!
+          - Created target: CADDXF405_WING from SPEEDYBEEF405WING
+          - Display name via MSP: CADDX45+RUNA
 
-          Working hardware:
-          - GYRO/ACC: ICM40609 accepted through patched ICM42605 driver
-          - WHO_AM_I 0x3B accepted
-          - SPI: BUS_SPI1
-          - CS: PA4
+          Working FC4.5 dump:
+          - ACC/GYRO: LSM6DXX
           - BARO: SPL06
           - MAG: HMC5883
-          - Correct board yaw: 900
+          - align_mag: CW0FLIP
+          - align_board_yaw: 1800
 
           Added:
-          - RUNAv.51 startup OSD text
+          - RUNAv.45 startup OSD text
           - RUNA OSD shutter on Layout 2
           - VTX 3.3GHz table
           - VTX 5.8 switching:
             CH6 LOW  = 5820 MHz
             CH6 MID  = 5695 MHz
             CH6 HIGH = 5733 MHz
-          - VTX low power on disarm enabled in CLI presets
+          - GPS disabled in base CLI
+          - nav_extra_arming_safety = OFF
 
           Flash:
-          1. Use INAV Configurator 7.1.x
+          1. INAV Configurator 7.1.x
           2. DFU mode
           3. Full Chip Erase
-          4. Flash RUNA_FC51_FINAL.hex
+          4. Flash RUNA_FC45_FINAL_*.hex
 
           After flash:
           1. CLI:
@@ -745,9 +834,10 @@ jobs:
           2. Wait 15 seconds without touching board.
 
           3. Apply:
-             RUNA_FC51_FINAL_BASE.cli
+             RUNA_FC45_FINAL_BASE_NO_GPS.cli
 
-          4. Calibrate accelerometer.
+          4. Calibrate accelerometer manually:
+             Calibration -> Calibrate Accelerometer
 
           5. Check:
              status
@@ -759,16 +849,15 @@ jobs:
           - BARO=OK
           - MAG=OK
           - HWFAIL absent
-          - align_board_yaw = 900
+          - align_board_yaw = 1800
 
           Then apply VTX preset:
-          - RUNA_FC51_VTX_5G8_5820_5695_5733.cli
+          - RUNA_FC45_VTX_5G8_5820_5695_5733.cli
 
           OSD shutter:
           - Layout 2 = shutter mode
 
           Test without propeller.
-          Do not fly if axes are wrong or model drifts heavily.
           EOF
 
           echo "OUT files:"
@@ -777,5 +866,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC51-FINAL
+          name: RUNA-FC45-FINAL
           path: out/*
