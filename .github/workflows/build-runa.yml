@@ -1,4 +1,4 @@
-name: Build RUNA FC51 ICM40609 CS Scan V3
+name: Build RUNA FC51 ICM40609 PA4 Only
 
 on:
   workflow_dispatch:
@@ -8,54 +8,16 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: SPI1_PA4
-            spi: BUS_SPI1
-            cs: PA4
-          - name: SPI1_PA15
-            spi: BUS_SPI1
-            cs: PA15
-          - name: SPI1_PB12
-            spi: BUS_SPI1
-            cs: PB12
-          - name: SPI1_PB2
-            spi: BUS_SPI1
-            cs: PB2
-          - name: SPI1_PC4
-            spi: BUS_SPI1
-            cs: PC4
-          - name: SPI1_PC13
-            spi: BUS_SPI1
-            cs: PC13
-          - name: SPI1_PC15
-            spi: BUS_SPI1
-            cs: PC15
-
-          - name: SPI2_PB12
-            spi: BUS_SPI2
-            cs: PB12
-          - name: SPI2_PB2
-            spi: BUS_SPI2
-            cs: PB2
-          - name: SPI2_PC4
-            spi: BUS_SPI2
-            cs: PC4
-          - name: SPI2_PC13
-            spi: BUS_SPI2
-            cs: PC13
-          - name: SPI2_PC15
-            spi: BUS_SPI2
-            cs: PC15
-
     env:
       INAV_VERSION: 7.1.2
       TARGET: SPEEDYBEEF405WING
 
       OLD_TARGET_NAME: SPEEDYBEEF405WING
       NEW_TARGET_NAME: SPEEDYBEE51+RUNA!
+
+      RUNA_SPI_BUS: BUS_SPI1
+      RUNA_CS_PIN: PA4
+      RUNA_VARIANT: SPI1_PA4
 
     steps:
       - name: Install deps
@@ -100,7 +62,7 @@ jobs:
           cd inav
           git rev-parse HEAD
 
-      - name: Patch target IMU CS SPI for scan
+      - name: Patch target IMU to SPI1 PA4
         run: |
           cd inav
 
@@ -110,8 +72,8 @@ jobs:
           import re
 
           target = os.environ["TARGET"]
-          spi = "${{ matrix.spi }}"
-          cs = "${{ matrix.cs }}"
+          spi = os.environ["RUNA_SPI_BUS"]
+          cs = os.environ["RUNA_CS_PIN"]
 
           path = Path(f"src/main/target/{target}/target.h")
 
@@ -163,8 +125,17 @@ jobs:
           text += f"""
 
           /*
-           * RUNA FC51 ICM40609 CS/SPI scan test V3
-           * Variant: {spi}_{cs}
+           * RUNA FC51 ICM40609 PA4 ONLY TEST
+           *
+           * Working FC5.1 diff says:
+           * acc_hardware = ICM40609
+           * baro_hardware = SPL06
+           * mag_hardware = HMC5883
+           * align_board_yaw = 1800
+           *
+           * Test:
+           * SPI = {spi}
+           * CS  = {cs}
            *
            * We use ICM42605 driver as transport,
            * patched to accept ICM40609 WHO_AM_I = 0x3B.
@@ -246,7 +217,7 @@ jobs:
           text = path.read_text(encoding="utf-8")
 
           old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
-          new = 'tfp_sprintf(string_buffer, "RUNA51 TEST");'
+          new = 'tfp_sprintf(string_buffer, "RUNA51 PA4");'
 
           if old in text:
               text = text.replace(old, new, 1)
@@ -299,7 +270,7 @@ jobs:
           old = os.environ["OLD_TARGET_NAME"].encode()
           new = os.environ["NEW_TARGET_NAME"].encode()
           target = os.environ["TARGET"]
-          variant = "${{ matrix.name }}"
+          variant = os.environ["RUNA_VARIANT"]
 
           print("OLD:", os.environ["OLD_TARGET_NAME"], len(old))
           print("NEW:", os.environ["NEW_TARGET_NAME"], len(new))
@@ -406,7 +377,7 @@ jobs:
               else:
                   patched_lines.append(line)
 
-          dst_hex = out / f"RUNA_FC51_ICM40609_SCAN_V3_{variant}.hex"
+          dst_hex = out / f"RUNA_FC51_ICM40609_PA4_ONLY.hex"
           dst_hex.write_text("\n".join(patched_lines) + "\n")
           print("Written HEX:", dst_hex)
 
@@ -421,20 +392,20 @@ jobs:
 
               if count:
                   patched = data.replace(old, new)
-                  dst_bin = out / f"RUNA_FC51_ICM40609_SCAN_V3_{variant}.bin"
+                  dst_bin = out / f"RUNA_FC51_ICM40609_PA4_ONLY.bin"
                   dst_bin.write_bytes(patched)
                   print("Written BIN:", dst_bin, "replacements:", count)
                   break
           PY
 
-      - name: Create test CLI
+      - name: Create PA4 test CLI
         run: |
           mkdir -p out
 
-          cat > out/RUNA_FC51_SCAN_V3_${{ matrix.name }}.cli <<'EOF'
+          cat > out/RUNA_FC51_PA4_ONLY.cli <<'EOF'
           batch start
 
-          # RUNA FC51 ICM40609 scan test V3
+          # RUNA FC51 ICM40609 PA4 ONLY TEST
           # Use ICM42605 because driver is patched to accept ICM40609 WHO_AM_I=0x3B
 
           set acc_hardware = ICM42605
@@ -466,15 +437,15 @@ jobs:
           save
           EOF
 
-          cat > out/README_${{ matrix.name }}.txt <<'EOF'
-          RUNA FC51 ICM40609 CS/SPI scan test V3
+          cat > out/README_RUNA_FC51_PA4_ONLY.txt <<'EOF'
+          RUNA FC51 ICM40609 PA4 ONLY TEST
 
           Variant:
-          SPI = ${{ matrix.spi }}
-          CS  = ${{ matrix.cs }}
+          SPI = BUS_SPI1
+          CS  = PA4
 
           Flash this HEX:
-          RUNA_FC51_ICM40609_SCAN_V3_${{ matrix.name }}.hex
+          RUNA_FC51_ICM40609_PA4_ONLY.hex
 
           After flashing:
           1. CLI:
@@ -484,7 +455,7 @@ jobs:
           2. Wait 15 seconds without touching board.
 
           3. Apply:
-             RUNA_FC51_SCAN_V3_${{ matrix.name }}.cli
+             RUNA_FC51_PA4_ONLY.cli
 
           4. Check:
              status
@@ -499,6 +470,9 @@ jobs:
           GYRO=UNAVAILABLE
           ACC=UNAVAILABLE
 
+          If PA4 also fails:
+          simple ICM42605 alias is not enough and we need a real ICM40609 driver.
+
           Test without propeller.
           EOF
 
@@ -507,5 +481,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC51-SCAN-V3-${{ matrix.name }}
+          name: RUNA-FC51-ICM40609-PA4-ONLY
           path: out/*
