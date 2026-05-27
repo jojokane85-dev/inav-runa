@@ -1,4 +1,4 @@
-name: Build RUNA FC45 LSM6DXX Clean Scan
+name: Build RUNA FC45 LSM6DXX I2C Scan
 
 on:
   workflow_dispatch:
@@ -12,43 +12,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: SPI1_PA4
-            spi: BUS_SPI1
-            cs: PA4
-          - name: SPI1_PA15
-            spi: BUS_SPI1
-            cs: PA15
-          - name: SPI1_PB12
-            spi: BUS_SPI1
-            cs: PB12
-          - name: SPI1_PB2
-            spi: BUS_SPI1
-            cs: PB2
-          - name: SPI1_PC4
-            spi: BUS_SPI1
-            cs: PC4
-          - name: SPI1_PC13
-            spi: BUS_SPI1
-            cs: PC13
-          - name: SPI1_PC15
-            spi: BUS_SPI1
-            cs: PC15
-
-          - name: SPI2_PB12
-            spi: BUS_SPI2
-            cs: PB12
-          - name: SPI2_PB2
-            spi: BUS_SPI2
-            cs: PB2
-          - name: SPI2_PC4
-            spi: BUS_SPI2
-            cs: PC4
-          - name: SPI2_PC13
-            spi: BUS_SPI2
-            cs: PC13
-          - name: SPI2_PC15
-            spi: BUS_SPI2
-            cs: PC15
+          - name: I2C1_ADDR6A
+            i2c: BUS_I2C1
+            addr: 0x6A
+          - name: I2C1_ADDR6B
+            i2c: BUS_I2C1
+            addr: 0x6B
+          - name: I2C2_ADDR6A
+            i2c: BUS_I2C2
+            addr: 0x6A
+          - name: I2C2_ADDR6B
+            i2c: BUS_I2C2
+            addr: 0x6B
+          - name: I2C3_ADDR6A
+            i2c: BUS_I2C3
+            addr: 0x6A
+          - name: I2C3_ADDR6B
+            i2c: BUS_I2C3
+            addr: 0x6B
 
     env:
       INAV_VERSION: 7.1.2
@@ -112,7 +93,7 @@ jobs:
           echo "Created target ${TARGET} from ${BASE_TARGET}"
           ls -la src/main/target/${TARGET}
 
-      - name: Patch target for FC45 LSM6DXX clean scan
+      - name: Patch target for FC45 LSM6DXX I2C scan
         run: |
           cd inav
 
@@ -122,15 +103,16 @@ jobs:
           import re
 
           target = os.environ["TARGET"]
-          spi = "${{ matrix.spi }}"
-          cs = "${{ matrix.cs }}"
+          i2c = "${{ matrix.i2c }}"
+          addr = "${{ matrix.addr }}"
 
-          path = Path(f"src/main/target/{target}/target.h")
+          target_dir = Path(f"src/main/target/{target}")
+          target_h = target_dir / "target.h"
 
-          if not path.exists():
-              raise SystemExit(f"target.h not found: {path}")
+          if not target_h.exists():
+              raise SystemExit(f"target.h not found: {target_h}")
 
-          text = path.read_text(encoding="utf-8")
+          text = target_h.read_text(encoding="utf-8")
 
           remove_patterns = [
               r'^\s*#define\s+USE_IMU_ICM42605\s*$',
@@ -139,27 +121,16 @@ jobs:
               r'^\s*#define\s+ICM42605_SPI_BUS\s+\S+\s*$',
               r'^\s*#define\s+ICM42605_EXTI_PIN\s+\S+\s*$',
 
-              r'^\s*#define\s+USE_IMU_ICM42688P\s*$',
-              r'^\s*#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*$',
-              r'^\s*#define\s+ICM42688P_CS_PIN\s+\S+\s*$',
-              r'^\s*#define\s+ICM42688P_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+ICM42688P_EXTI_PIN\s+\S+\s*$',
-
               r'^\s*#define\s+USE_IMU_BMI270\s*$',
               r'^\s*#define\s+BMI270_CS_PIN\s+\S+\s*$',
               r'^\s*#define\s+BMI270_SPI_BUS\s+\S+\s*$',
               r'^\s*#define\s+IMU_BMI270_ALIGN\s+\S+\s*$',
-              r'^\s*#define\s+BMI270_EXTI_PIN\s+\S+\s*$',
-
-              r'^\s*#define\s+USE_IMU_MPU6000\s*$',
-              r'^\s*#define\s+MPU6000_CS_PIN\s+\S+\s*$',
-              r'^\s*#define\s+MPU6000_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+IMU_MPU6000_ALIGN\s+\S+\s*$',
 
               r'^\s*#define\s+USE_IMU_LSM6DXX\s*$',
               r'^\s*#define\s+LSM6DXX_CS_PIN\s+\S+\s*$',
               r'^\s*#define\s+LSM6DXX_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+LSM6DXX_EXTI_PIN\s+\S+\s*$',
+              r'^\s*#define\s+LSM6DXX_I2C_BUS\s+\S+\s*$',
+              r'^\s*#define\s+LSM6DXX_I2C_ADDR\s+\S+\s*$',
               r'^\s*#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*$',
 
               r'^\s*#define\s+USE_BARO_SPL06\s*$',
@@ -176,20 +147,21 @@ jobs:
           text += f"""
 
           /*
-           * RUNA FC4.5 LSM6DXX CLEAN SCAN
+           * RUNA FC4.5 LSM6DXX I2C SCAN
            *
-           * Important:
-           * No fake/forced LSM6DXX detect here.
-           * We use original INAV LSM6DXX driver.
+           * Working dump:
+           * ACC/GYRO = LSM6DXX
+           * BARO = SPL06
+           * MAG = HMC5883
            *
            * Variant:
-           * SPI = {spi}
-           * CS  = {cs}
+           * I2C = {i2c}
+           * ADDR = {addr}
            */
 
           #define USE_IMU_LSM6DXX
-          #define LSM6DXX_SPI_BUS {spi}
-          #define LSM6DXX_CS_PIN {cs}
+          #define LSM6DXX_I2C_BUS {i2c}
+          #define LSM6DXX_I2C_ADDR {addr}
           #define IMU_LSM6DXX_ALIGN CW0_DEG
 
           #define USE_BARO_SPL06
@@ -199,15 +171,24 @@ jobs:
           #define MAG_I2C_BUS BUS_I2C1
           """
 
-          path.write_text(text, encoding="utf-8")
+          target_h.write_text(text, encoding="utf-8")
+
+          # Если в target.c есть SPI-регистрация IMU — убираем её.
+          target_c = target_dir / "target.c"
+          if target_c.exists():
+              ctext = target_c.read_text(encoding="utf-8")
+              ctext = re.sub(r'^.*DEVHW_ICM42605.*$\n?', '', ctext, flags=re.M)
+              ctext = re.sub(r'^.*DEVHW_BMI270.*$\n?', '', ctext, flags=re.M)
+              ctext = re.sub(r'^.*DEVHW_LSM6DXX.*$\n?', '', ctext, flags=re.M)
+              target_c.write_text(ctext, encoding="utf-8")
 
           print("Target patched:")
-          print("SPI =", spi)
-          print("CS  =", cs)
+          print("I2C =", i2c)
+          print("ADDR =", addr)
           PY
 
           echo "===== Patched target.h lines ====="
-          grep -n -E "LSM6DXX|SPL06|HMC5883|SPI_BUS|CS_PIN|ALIGN|BARO_I2C|MAG_I2C" src/main/target/${TARGET}/target.h || true
+          grep -n -E "LSM6DXX|SPL06|HMC5883|I2C|ALIGN" src/main/target/${TARGET}/target.h || true
 
       - name: Patch startup OSD text test
         run: |
@@ -225,7 +206,7 @@ jobs:
           text = path.read_text(encoding="utf-8")
 
           old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
-          new = 'tfp_sprintf(string_buffer, "RUNA45 SCAN");'
+          new = 'tfp_sprintf(string_buffer, "RUNA45 I2C");'
 
           if old in text:
               text = text.replace(old, new, 1)
@@ -277,7 +258,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="out/RUNA_FC45_LSM6DXX_SCAN_${{ matrix.name }}_${base}"
+            dst="out/RUNA_FC45_LSM6DXX_I2C_SCAN_${{ matrix.name }}_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -289,13 +270,13 @@ jobs:
             exit 1
           fi
 
-          cat > out/RUNA_FC45_LSM6DXX_SCAN_${{ matrix.name }}.cli <<'EOF'
+          cat > out/RUNA_FC45_LSM6DXX_I2C_SCAN_${{ matrix.name }}.cli <<'EOF'
           batch start
 
-          # RUNA FC4.5 LSM6DXX CLEAN SCAN
+          # RUNA FC4.5 LSM6DXX I2C SCAN
           # Variant:
-          # SPI = ${{ matrix.spi }}
-          # CS  = ${{ matrix.cs }}
+          # I2C = ${{ matrix.i2c }}
+          # ADDR = ${{ matrix.addr }}
 
           feature -GPS
           feature OSD
@@ -338,11 +319,11 @@ jobs:
           EOF
 
           cat > out/README_${{ matrix.name }}.txt <<'EOF'
-          RUNA FC45 LSM6DXX CLEAN SCAN
+          RUNA FC45 LSM6DXX I2C SCAN
 
           Variant:
-          SPI = ${{ matrix.spi }}
-          CS  = ${{ matrix.cs }}
+          I2C = ${{ matrix.i2c }}
+          ADDR = ${{ matrix.addr }}
 
           Flash HEX from this archive.
 
@@ -354,7 +335,7 @@ jobs:
           2. Wait 15 seconds without touching board.
 
           3. Apply:
-             RUNA_FC45_LSM6DXX_SCAN_${{ matrix.name }}.cli
+             RUNA_FC45_LSM6DXX_I2C_SCAN_${{ matrix.name }}.cli
 
           4. Calibrate accelerometer manually:
              Calibration -> Calibrate Accelerometer
@@ -368,8 +349,7 @@ jobs:
           - ACC=OK
           - BARO=OK
           - MAG=OK
-          - 3D model does NOT spin by itself
-          - axes can be corrected by align_board_yaw if needed
+          - 3D model does NOT spin fast
 
           Bad result:
           - GYRO=UNAVAILABLE
@@ -385,5 +365,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-LSM6DXX-SCAN-${{ matrix.name }}
+          name: RUNA-FC45-LSM6DXX-I2C-SCAN-${{ matrix.name }}
           path: out/*
