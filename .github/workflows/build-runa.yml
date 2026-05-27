@@ -1,4 +1,4 @@
-name: Build RUNA FC51 ICM40609 PA4 Only
+name: Build RUNA FC51 FINAL
 
 on:
   workflow_dispatch:
@@ -17,7 +17,6 @@ jobs:
 
       RUNA_SPI_BUS: BUS_SPI1
       RUNA_CS_PIN: PA4
-      RUNA_VARIANT: SPI1_PA4
 
     steps:
       - name: Install deps
@@ -62,7 +61,7 @@ jobs:
           cd inav
           git rev-parse HEAD
 
-      - name: Patch target IMU to SPI1 PA4
+      - name: Patch target for RUNA FC51 hardware
         run: |
           cd inav
 
@@ -125,20 +124,15 @@ jobs:
           text += f"""
 
           /*
-           * RUNA FC51 ICM40609 PA4 ONLY TEST
+           * RUNA FC5.1 FINAL hardware patch
            *
-           * Working FC5.1 diff says:
-           * acc_hardware = ICM40609
-           * baro_hardware = SPL06
-           * mag_hardware = HMC5883
-           * align_board_yaw = 1800
-           *
-           * Test:
+           * Working result:
+           * GYRO/ACC OK through ICM42605 driver with ICM40609 WHO_AM_I 0x3B
            * SPI = {spi}
            * CS  = {cs}
-           *
-           * We use ICM42605 driver as transport,
-           * patched to accept ICM40609 WHO_AM_I = 0x3B.
+           * BARO = SPL06
+           * MAG  = HMC5883
+           * align_board_yaw = 900 in CLI
            */
 
           #define USE_IMU_ICM42605
@@ -177,12 +171,9 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          # Убираем старые неудачные вставки, если они остались
           text = text.replace("#define RUNA_ICM40609_WHOAMI 0x3B\n", "")
           text = text.replace("case RUNA_ICM40609_WHOAMI:", "case 0x3B:")
 
-          # Вставляем прямой case 0x3B перед ICM42605.
-          # 0x3B = WHO_AM_I для ICM40609.
           if "case 0x3B:" not in text:
               if "case ICM42605_WHO_AM_I_CONST:" not in text:
                   raise SystemExit("Could not find case ICM42605_WHO_AM_I_CONST")
@@ -201,7 +192,7 @@ jobs:
                   print(line)
           PY
 
-      - name: Patch startup OSD text
+      - name: Patch startup OSD text RUNAv.51
         run: |
           cd inav
 
@@ -217,7 +208,7 @@ jobs:
           text = path.read_text(encoding="utf-8")
 
           old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
-          new = 'tfp_sprintf(string_buffer, "RUNA51 PA4");'
+          new = 'tfp_sprintf(string_buffer, "RUNAv.51");'
 
           if old in text:
               text = text.replace(old, new, 1)
@@ -226,8 +217,194 @@ jobs:
                   'uint8_t xPos = OSD_CENTER_S(string_buffer);',
                   1
               )
+              print("Startup OSD text patched: RUNAv.51")
+          else:
+              print("WARNING: startup text pattern not found")
 
           path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Patch RUNA OSD shutter on Layout 2
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("osd.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
+
+          replacement = r"""
+                  static bool runaShutterWasActive = false;
+                  static uint8_t runaShutterNextRow = 0;
+
+                  if (currentLayout == 2) {
+                      textAttributes_t runaAttr = TEXT_ATTRIBUTES_NONE;
+                      TEXT_ATTRIBUTES_ADD_SOLID_BG(runaAttr);
+
+                      char runaMask[64];
+
+                      uint8_t cols = osdDisplayPort->cols;
+                      uint8_t rows = osdDisplayPort->rows;
+
+                      if (cols > 63) {
+                          cols = 63;
+                      }
+
+                      const uint8_t windowWidth = cols >= 30 ? 10 : cols / 3;
+                      const uint8_t windowHeight = rows >= 16 ? 4 : rows / 3;
+
+                      const uint8_t windowX = (cols - windowWidth) / 2;
+                      const uint8_t windowY = (rows - windowHeight) / 2;
+
+                      if (!runaShutterWasActive) {
+                          displayClearScreen(osdDisplayPort);
+                          runaShutterWasActive = true;
+                          runaShutterNextRow = 0;
+                      }
+
+                      for (uint8_t pass = 0; pass < 2; pass++) {
+                          uint8_t y = runaShutterNextRow;
+
+                          const bool inWindowY = (y >= windowY) && (y < windowY + windowHeight);
+
+                          if (!inWindowY) {
+                              memset(runaMask, ' ', cols);
+                              runaMask[cols] = '\0';
+                              displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
+                          } else {
+                              if (windowX > 0) {
+                                  memset(runaMask, ' ', windowX);
+                                  runaMask[windowX] = '\0';
+                                  displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
+                              }
+
+                              const uint8_t rightX = windowX + windowWidth;
+
+                              if (rightX < cols) {
+                                  const uint8_t rightWidth = cols - rightX;
+                                  memset(runaMask, ' ', rightWidth);
+                                  runaMask[rightWidth] = '\0';
+                                  displayWriteWithAttr(osdDisplayPort, rightX, y, runaMask, runaAttr);
+                              }
+                          }
+
+                          runaShutterNextRow++;
+
+                          if (runaShutterNextRow >= rows) {
+                              runaShutterNextRow = 0;
+                          }
+                      }
+                  } else {
+                      if (runaShutterWasActive) {
+                          displayClearScreen(osdDisplayPort);
+                          runaShutterWasActive = false;
+                          runaShutterNextRow = 0;
+                      }
+
+                      osdDrawNextElement();
+                  }
+
+                  displayHeartbeat(osdDisplayPort);
+                  displayCommitTransaction(osdDisplayPort);"""
+
+          new_text, count = re.subn(pattern, replacement, text, count=1)
+
+          if count != 1:
+              print("WARNING: OSD draw block not found, shutter skipped")
+              raise SystemExit(0)
+
+          path.write_text(new_text, encoding="utf-8")
+          print("RUNA OSD shutter patched on Layout 2")
+          PY
+
+      - name: Patch VTX 3.3GHz table
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/main/io/vtx_string.c")
+
+          if not path.exists():
+              print("vtx_string.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          def sub_once(text, pattern, repl, name, flags=0):
+              new_text, count = re.subn(pattern, repl, text, count=1, flags=flags)
+              print(f"{name}: patch count = {count}")
+              return new_text if count else text
+
+          text = sub_once(
+              text,
+              r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_BAND_COUNT 6",
+              "1G3 band count"
+          )
+
+          text = sub_once(
+              text,
+              r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
+              "#define VTX_STRING_1G3_POWER_COUNT 5",
+              "1G3 power count"
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
+              """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
+              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
+              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
+              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
+              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
+              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
+              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
+          };""",
+              "3.3GHz frequency table",
+              flags=re.S
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
+              "-", "A", "B", "C", "D", "E", "F",
+          };""",
+              "3.3GHz band names",
+              flags=re.S
+          )
+
+          text = sub_once(
+              text,
+              r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
+              'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
+              "3.3GHz band letters"
+          )
+
+          text = sub_once(
+              text,
+              r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
+              """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
+              "---", "25", "200", "400", "800", "MAX"
+          };""",
+              "3.3GHz power names",
+              flags=re.S
+          )
+
+          path.write_text(text, encoding="utf-8")
+          print("RUNA VTX 3.3GHz table patched")
           PY
 
       - name: Configure CMake
@@ -249,7 +426,7 @@ jobs:
             exit 1
           fi
 
-      - name: Build firmware
+      - name: Build RUNA FC51 FINAL firmware
         run: |
           cd inav/build
           make clean_${TARGET} || true
@@ -270,11 +447,9 @@ jobs:
           old = os.environ["OLD_TARGET_NAME"].encode()
           new = os.environ["NEW_TARGET_NAME"].encode()
           target = os.environ["TARGET"]
-          variant = os.environ["RUNA_VARIANT"]
 
           print("OLD:", os.environ["OLD_TARGET_NAME"], len(old))
           print("NEW:", os.environ["NEW_TARGET_NAME"], len(new))
-          print("VARIANT:", variant)
 
           if len(old) != len(new):
               raise SystemExit("Length mismatch")
@@ -377,7 +552,7 @@ jobs:
               else:
                   patched_lines.append(line)
 
-          dst_hex = out / f"RUNA_FC51_ICM40609_PA4_ONLY.hex"
+          dst_hex = out / "RUNA_FC51_FINAL.hex"
           dst_hex.write_text("\n".join(patched_lines) + "\n")
           print("Written HEX:", dst_hex)
 
@@ -392,21 +567,32 @@ jobs:
 
               if count:
                   patched = data.replace(old, new)
-                  dst_bin = out / f"RUNA_FC51_ICM40609_PA4_ONLY.bin"
+                  dst_bin = out / "RUNA_FC51_FINAL.bin"
                   dst_bin.write_bytes(patched)
                   print("Written BIN:", dst_bin, "replacements:", count)
                   break
+
+          elf_files = list(Path("inav/build").rglob(f"*{target}*.elf"))
+          if elf_files:
+              dst_elf = out / "RUNA_FC51_FINAL.elf"
+              dst_elf.write_bytes(elf_files[0].read_bytes())
+              print("ELF copied:", dst_elf)
           PY
 
-      - name: Create PA4 test CLI
+      - name: Create RUNA FC51 CLI files
         run: |
           mkdir -p out
 
-          cat > out/RUNA_FC51_PA4_ONLY.cli <<'EOF'
+          cat > out/RUNA_FC51_FINAL_BASE.cli <<'EOF'
           batch start
 
-          # RUNA FC51 ICM40609 PA4 ONLY TEST
-          # Use ICM42605 because driver is patched to accept ICM40609 WHO_AM_I=0x3B
+          # RUNA FC51 FINAL BASE
+          # Working hardware:
+          # GYRO/ACC OK through ICM42605 driver + ICM40609 WHOAMI 0x3B
+          # SPI1 / PA4
+          # BARO SPL06
+          # MAG HMC5883
+          # Correct axes: align_board_yaw = 900
 
           set acc_hardware = ICM42605
           set baro_hardware = SPL06
@@ -415,7 +601,7 @@ jobs:
 
           set align_board_roll = 0
           set align_board_pitch = 0
-          set align_board_yaw = 1800
+          set align_board_yaw = 900
 
           set gyro_zero_x = 0
           set gyro_zero_y = 0
@@ -437,17 +623,121 @@ jobs:
           save
           EOF
 
-          cat > out/README_RUNA_FC51_PA4_ONLY.txt <<'EOF'
-          RUNA FC51 ICM40609 PA4 ONLY TEST
+          cat > out/RUNA_FC51_VTX_5G8_5820_5695_5733.cli <<'EOF'
+          batch start
 
-          Variant:
-          SPI = BUS_SPI1
-          CS  = PA4
+          # RUNA FC51 VTX 5.8 GHz
+          # VTX: IRC Tramp
+          # Port: UART5 / TX5
+          # AUX2 = CH6
+          #
+          # CH6 LOW  -> 5820 MHz = FATSHARK F5
+          # CH6 MID  -> 5695 MHz = RACEBAND R2
+          # CH6 HIGH -> 5733 MHz = BAND B B1
 
-          Flash this HEX:
-          RUNA_FC51_ICM40609_PA4_ONLY.hex
+          feature VTX
 
-          After flashing:
+          # UART5 / TX5 -> IRC Tramp
+          # serial 4 = UART5
+          serial 4 4096 115200 115200 0 115200
+
+          set vtx_frequency_group = FREQUENCYGROUP_5G8
+
+          # Start channel: FATSHARK F5 / 5820 MHz
+          set vtx_band = 4
+          set vtx_channel = 5
+
+          # Armed power = 5
+          # Disarmed low power = ON
+          set vtx_power = 5
+          set vtx_low_power_disarm = ON
+          set vtx_pit_mode_chan = 1
+          set vtx_max_power_override = 0
+
+          # Clear old VTX logic 0-8
+          logic 0 0 -1 0 0 0 0 0 0
+          logic 1 0 -1 0 0 0 0 0 0
+          logic 2 0 -1 0 0 0 0 0 0
+          logic 3 0 -1 0 0 0 0 0 0
+          logic 4 0 -1 0 0 0 0 0 0
+          logic 5 0 -1 0 0 0 0 0 0
+          logic 6 0 -1 0 0 0 0 0 0
+          logic 7 0 -1 0 0 0 0 0 0
+          logic 8 0 -1 0 0 0 0 0 0
+
+          # CH6 LOW / MID / HIGH detectors
+          logic 0 1 -1 4 1 6 0 0 0
+          logic 1 1 -1 5 1 6 0 0 0
+          logic 2 1 -1 6 1 6 0 0 0
+
+          # LOW -> FATSHARK F5 / 5820 MHz
+          logic 3 1 0 30 0 4 0 0 0
+          logic 4 1 0 31 0 5 0 0 0
+
+          # MID -> RACEBAND R2 / 5695 MHz
+          logic 5 1 1 30 0 5 0 0 0
+          logic 6 1 1 31 0 2 0 0 0
+
+          # HIGH -> BAND B B1 / 5733 MHz
+          logic 7 1 2 30 0 2 0 0 0
+          logic 8 1 2 31 0 1 0 0 0
+
+          save
+          EOF
+
+          cat > out/RUNA_FC51_VTX_3G3.cli <<'EOF'
+          batch start
+
+          feature VTX
+
+          # RUNA 3.3GHz uses patched FREQUENCYGROUP_1G3 table
+          set vtx_frequency_group = FREQUENCYGROUP_1G3
+          set vtx_band = 1
+          set vtx_channel = 1
+          set vtx_power = 5
+          set vtx_low_power_disarm = ON
+          set vtx_halfduplex = ON
+          set vtx_smartaudio_early_akk_workaround = ON
+          set vtx_smartaudio_alternate_softserial_method = ON
+          set vtx_smartaudio_stopbits = 2
+
+          save
+          EOF
+
+          cat > out/README_RUNA_FC51_FINAL.txt <<'EOF'
+          RUNA FC51 FINAL
+
+          Base:
+          - INAV 7.1.2
+          - Real target: SPEEDYBEEF405WING
+          - Display name patched to: SPEEDYBEE51+RUNA!
+
+          Working hardware:
+          - GYRO/ACC: ICM40609 accepted through patched ICM42605 driver
+          - WHO_AM_I 0x3B accepted
+          - SPI: BUS_SPI1
+          - CS: PA4
+          - BARO: SPL06
+          - MAG: HMC5883
+          - Correct board yaw: 900
+
+          Added:
+          - RUNAv.51 startup OSD text
+          - RUNA OSD shutter on Layout 2
+          - VTX 3.3GHz table
+          - VTX 5.8 switching:
+            CH6 LOW  = 5820 MHz
+            CH6 MID  = 5695 MHz
+            CH6 HIGH = 5733 MHz
+          - VTX low power on disarm enabled in CLI presets
+
+          Flash:
+          1. Use INAV Configurator 7.1.x
+          2. DFU mode
+          3. Full Chip Erase
+          4. Flash RUNA_FC51_FINAL.hex
+
+          After flash:
           1. CLI:
              defaults
              save
@@ -455,31 +745,37 @@ jobs:
           2. Wait 15 seconds without touching board.
 
           3. Apply:
-             RUNA_FC51_PA4_ONLY.cli
+             RUNA_FC51_FINAL_BASE.cli
 
-          4. Check:
+          4. Calibrate accelerometer.
+
+          5. Check:
              status
+             get align_board
 
-          Good result:
-          GYRO=OK
-          ACC=OK
-          BARO=OK
-          MAG=OK
+          Required:
+          - GYRO=OK
+          - ACC=OK
+          - BARO=OK
+          - MAG=OK
+          - HWFAIL absent
+          - align_board_yaw = 900
 
-          Bad result:
-          GYRO=UNAVAILABLE
-          ACC=UNAVAILABLE
+          Then apply VTX preset:
+          - RUNA_FC51_VTX_5G8_5820_5695_5733.cli
 
-          If PA4 also fails:
-          simple ICM42605 alias is not enough and we need a real ICM40609 driver.
+          OSD shutter:
+          - Layout 2 = shutter mode
 
           Test without propeller.
+          Do not fly if axes are wrong or model drifts heavily.
           EOF
 
+          echo "OUT files:"
           ls -lah out
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC51-ICM40609-PA4-ONLY
+          name: RUNA-FC51-FINAL
           path: out/*
