@@ -1,4 +1,4 @@
-name: Build RUNA FC45 LSM6DXX WHOAMI Scan
+name: Build RUNA FC45 LSM6DXX WHOAMI Scan V2
 
 on:
   workflow_dispatch:
@@ -241,7 +241,7 @@ jobs:
           text += f"""
 
           /*
-           * RUNA FC4.5 LSM6DXX WHOAMI SPI SCAN
+           * RUNA FC4.5 LSM6DXX WHOAMI SPI SCAN V2
            *
            * Test variant:
            * SPI = {spi}
@@ -308,7 +308,7 @@ jobs:
                   print(line)
           PY
 
-      - name: Patch LSM6DXX WHOAMI diagnostic name
+      - name: Patch LSM6DXX WHOAMI diagnostic SAFE
         run: |
           cd inav
 
@@ -322,28 +322,22 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          # Не заставляем датчик всегда работать.
-          # Только добавляем более широкий список допустимых WHO_AM_I,
-          # если в драйвере есть строгий switch/case.
-          known_ids = ["0x69", "0x6A", "0x6B", "0x6C", "0x6D"]
+          # ВАЖНО:
+          # Не добавляем case 0x6A / 0x6C вручную.
+          # В этой ветке они уже могут совпадать с LSM6DSL_CHIP_ID / LSM6DSO_CHIP_ID.
+          # Иначе будет duplicate case value.
 
-          if "RUNA_LSM6DXX_WHOAMI_SCAN_IDS" not in text:
+          marker = "/* RUNA_LSM6DXX_SAFE_WHOAMI_SCAN_V2 */"
+
+          if marker not in text:
               text = text.replace(
                   "#include",
-                  "/* RUNA_LSM6DXX_WHOAMI_SCAN_IDS: 0x69 0x6A 0x6B 0x6C 0x6D */\n#include",
-                  1
-              )
-
-          # Если драйвер содержит case 0x69, добавляем рядом другие варианты.
-          if "case 0x6A:" not in text and "case LSM6DSO_CHIP_ID:" in text:
-              text = text.replace(
-                  "case LSM6DSO_CHIP_ID:",
-                  "case LSM6DSO_CHIP_ID:\n    case 0x6A:\n    case 0x6B:\n    case 0x6C:\n    case 0x6D:",
+                  marker + "\n#include",
                   1
               )
 
           path.write_text(text, encoding="utf-8")
-          print("RUNA LSM6DXX WHOAMI diagnostic patch done")
+          print("RUNA safe WHOAMI marker added, no duplicate cases")
           PY
 
       - name: Patch startup OSD text
@@ -414,7 +408,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="out/RUNA_FC45_WHOAMI_SCAN_${{ matrix.name }}_${base}"
+            dst="out/RUNA_FC45_WHOAMI_SCAN_V2_${{ matrix.name }}_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -426,10 +420,10 @@ jobs:
             exit 1
           fi
 
-          cat > out/RUNA_FC45_WHOAMI_SCAN_${{ matrix.name }}.cli <<'EOF'
+          cat > out/RUNA_FC45_WHOAMI_SCAN_V2_${{ matrix.name }}.cli <<'EOF'
           batch start
 
-          # RUNA FC4.5 LSM6DXX WHOAMI SPI SCAN
+          # RUNA FC4.5 LSM6DXX WHOAMI SPI SCAN V2
           # Variant:
           # SPI = ${{ matrix.spi }}
           # CS  = ${{ matrix.cs }}
@@ -477,7 +471,7 @@ jobs:
           EOF
 
           cat > out/README_${{ matrix.name }}.txt <<'EOF'
-          RUNA FC45 LSM6DXX WHOAMI SPI SCAN
+          RUNA FC45 LSM6DXX WHOAMI SPI SCAN V2
 
           Variant:
           SPI = ${{ matrix.spi }}
@@ -493,7 +487,7 @@ jobs:
           2. Wait 15 seconds without touching board.
 
           3. Apply:
-             RUNA_FC45_WHOAMI_SCAN_${{ matrix.name }}.cli
+             RUNA_FC45_WHOAMI_SCAN_V2_${{ matrix.name }}.cli
 
           4. Calibrate accelerometer manually:
              Calibration -> Calibrate Accelerometer
@@ -525,6 +519,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-WHOAMI-SCAN-${{ matrix.name }}
+          name: RUNA-FC45-WHOAMI-SCAN-V2-${{ matrix.name }}
           path: out/*
-          
