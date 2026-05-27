@@ -1,4 +1,4 @@
-name: Build RUNA FC45 FINAL
+name: Build RUNA FC45 LSM6DXX Clean Scan
 
 on:
   workflow_dispatch:
@@ -8,13 +8,52 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: SPI1_PA4
+            spi: BUS_SPI1
+            cs: PA4
+          - name: SPI1_PA15
+            spi: BUS_SPI1
+            cs: PA15
+          - name: SPI1_PB12
+            spi: BUS_SPI1
+            cs: PB12
+          - name: SPI1_PB2
+            spi: BUS_SPI1
+            cs: PB2
+          - name: SPI1_PC4
+            spi: BUS_SPI1
+            cs: PC4
+          - name: SPI1_PC13
+            spi: BUS_SPI1
+            cs: PC13
+          - name: SPI1_PC15
+            spi: BUS_SPI1
+            cs: PC15
+
+          - name: SPI2_PB12
+            spi: BUS_SPI2
+            cs: PB12
+          - name: SPI2_PB2
+            spi: BUS_SPI2
+            cs: PB2
+          - name: SPI2_PC4
+            spi: BUS_SPI2
+            cs: PC4
+          - name: SPI2_PC13
+            spi: BUS_SPI2
+            cs: PC13
+          - name: SPI2_PC15
+            spi: BUS_SPI2
+            cs: PC15
+
     env:
       INAV_VERSION: 7.1.2
       BASE_TARGET: SPEEDYBEEF405WING
       TARGET: CADDXF405_WING
-      RUNA_NAME: CADDX45+RUNA
-      RUNA_SPI_BUS: BUS_SPI1
-      RUNA_CS_PIN: PA4
 
     steps:
       - name: Install deps
@@ -73,7 +112,7 @@ jobs:
           echo "Created target ${TARGET} from ${BASE_TARGET}"
           ls -la src/main/target/${TARGET}
 
-      - name: Patch target for RUNA FC45 hardware
+      - name: Patch target for FC45 LSM6DXX clean scan
         run: |
           cd inav
 
@@ -83,8 +122,8 @@ jobs:
           import re
 
           target = os.environ["TARGET"]
-          spi = os.environ["RUNA_SPI_BUS"]
-          cs = os.environ["RUNA_CS_PIN"]
+          spi = "${{ matrix.spi }}"
+          cs = "${{ matrix.cs }}"
 
           path = Path(f"src/main/target/{target}/target.h")
 
@@ -93,7 +132,6 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          # Убираем старые IMU / BARO / MAG define, чтобы оставить чистую FC4.5 связку.
           remove_patterns = [
               r'^\s*#define\s+USE_IMU_ICM42605\s*$',
               r'^\s*#define\s+IMU_ICM42605_ALIGN\s+\S+\s*$',
@@ -121,6 +159,7 @@ jobs:
               r'^\s*#define\s+USE_IMU_LSM6DXX\s*$',
               r'^\s*#define\s+LSM6DXX_CS_PIN\s+\S+\s*$',
               r'^\s*#define\s+LSM6DXX_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+LSM6DXX_EXTI_PIN\s+\S+\s*$',
               r'^\s*#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*$',
 
               r'^\s*#define\s+USE_BARO_SPL06\s*$',
@@ -137,15 +176,15 @@ jobs:
           text += f"""
 
           /*
-           * RUNA FC4.5 FINAL hardware patch
+           * RUNA FC4.5 LSM6DXX CLEAN SCAN
            *
-           * Working FC4.5 dump:
-           * target = CADDXF405_WING
-           * ACC/GYRO = LSM6DXX
-           * BARO = SPL06
-           * MAG = HMC5883
-           * align_mag = CW0FLIP
-           * align_board_yaw = 1800 in CLI
+           * Important:
+           * No fake/forced LSM6DXX detect here.
+           * We use original INAV LSM6DXX driver.
+           *
+           * Variant:
+           * SPI = {spi}
+           * CS  = {cs}
            */
 
           #define USE_IMU_LSM6DXX
@@ -170,105 +209,7 @@ jobs:
           echo "===== Patched target.h lines ====="
           grep -n -E "LSM6DXX|SPL06|HMC5883|SPI_BUS|CS_PIN|ALIGN|BARO_I2C|MAG_I2C" src/main/target/${TARGET}/target.h || true
 
-      - name: Patch LSM6DXX robust detect
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
-
-          if not path.exists():
-              print("accgyro_lsm6dxx.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8")
-
-          sig = "static bool lsm6dxxDetect"
-
-          start = text.find(sig)
-
-          if start == -1:
-              print("lsm6dxxDetect not found, skip")
-              raise SystemExit(0)
-
-          brace = text.find("{", start)
-          depth = 0
-          end = -1
-
-          for i in range(brace, len(text)):
-              if text[i] == "{":
-                  depth += 1
-              elif text[i] == "}":
-                  depth -= 1
-                  if depth == 0:
-                      end = i + 1
-                      break
-
-          if end == -1:
-              print("lsm6dxxDetect end not found, skip")
-              raise SystemExit(0)
-
-          repl = """static bool lsm6dxxDetect(busDevice_t * dev)
-          {
-              uint8_t tmp = 0;
-
-              busSetSpeed(dev, BUS_SPEED_INITIALIZATION);
-              delay(150);
-              busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);
-
-              /*
-               * RUNA FC4.5 robust LSM6DXX detection.
-               * Accept common LSM6DXX IDs.
-               */
-              if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
-                  lsm6dID = tmp;
-              } else {
-                  lsm6dID = LSM6DS3_CHIP_ID;
-              }
-
-              return true;
-          }"""
-
-          text = text[:start] + repl + text[end:]
-          path.write_text(text, encoding="utf-8")
-
-          print("RUNA LSM6DXX detect patched")
-          PY
-
-      - name: Patch RUNA name in MSP
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-          import os
-
-          runa_name = os.environ["RUNA_NAME"]
-
-          path = Path("src/main/fc/fc_msp.c")
-
-          if not path.exists():
-              print("fc_msp.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8")
-
-          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
-
-          replacement = f'''const char *runaTargetName = "{runa_name}";
-                  sbufWriteU8(dst, strlen(runaTargetName));
-                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));'''
-
-          text, count = re.subn(pattern, replacement, text, count=1)
-
-          path.write_text(text, encoding="utf-8")
-          print("MSP RUNA name patch count:", count)
-          PY
-
-      - name: Patch startup OSD text RUNAv.45
+      - name: Patch startup OSD text test
         run: |
           cd inav
 
@@ -284,7 +225,7 @@ jobs:
           text = path.read_text(encoding="utf-8")
 
           old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
-          new = 'tfp_sprintf(string_buffer, "RUNAv.45");'
+          new = 'tfp_sprintf(string_buffer, "RUNA45 SCAN");'
 
           if old in text:
               text = text.replace(old, new, 1)
@@ -293,194 +234,8 @@ jobs:
                   'uint8_t xPos = OSD_CENTER_S(string_buffer);',
                   1
               )
-              print("Startup OSD text patched: RUNAv.45")
-          else:
-              print("WARNING: startup text pattern not found")
 
           path.write_text(text, encoding="utf-8")
-          PY
-
-      - name: Patch RUNA OSD shutter on Layout 2
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("src/main/io/osd.c")
-
-          if not path.exists():
-              print("osd.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8")
-
-          pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
-
-          replacement = r"""
-                  static bool runaShutterWasActive = false;
-                  static uint8_t runaShutterNextRow = 0;
-
-                  if (currentLayout == 2) {
-                      textAttributes_t runaAttr = TEXT_ATTRIBUTES_NONE;
-                      TEXT_ATTRIBUTES_ADD_SOLID_BG(runaAttr);
-
-                      char runaMask[64];
-
-                      uint8_t cols = osdDisplayPort->cols;
-                      uint8_t rows = osdDisplayPort->rows;
-
-                      if (cols > 63) {
-                          cols = 63;
-                      }
-
-                      const uint8_t windowWidth = cols >= 30 ? 10 : cols / 3;
-                      const uint8_t windowHeight = rows >= 16 ? 4 : rows / 3;
-
-                      const uint8_t windowX = (cols - windowWidth) / 2;
-                      const uint8_t windowY = (rows - windowHeight) / 2;
-
-                      if (!runaShutterWasActive) {
-                          displayClearScreen(osdDisplayPort);
-                          runaShutterWasActive = true;
-                          runaShutterNextRow = 0;
-                      }
-
-                      for (uint8_t pass = 0; pass < 2; pass++) {
-                          uint8_t y = runaShutterNextRow;
-
-                          const bool inWindowY = (y >= windowY) && (y < windowY + windowHeight);
-
-                          if (!inWindowY) {
-                              memset(runaMask, ' ', cols);
-                              runaMask[cols] = '\0';
-                              displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
-                          } else {
-                              if (windowX > 0) {
-                                  memset(runaMask, ' ', windowX);
-                                  runaMask[windowX] = '\0';
-                                  displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
-                              }
-
-                              const uint8_t rightX = windowX + windowWidth;
-
-                              if (rightX < cols) {
-                                  const uint8_t rightWidth = cols - rightX;
-                                  memset(runaMask, ' ', rightWidth);
-                                  runaMask[rightWidth] = '\0';
-                                  displayWriteWithAttr(osdDisplayPort, rightX, y, runaMask, runaAttr);
-                              }
-                          }
-
-                          runaShutterNextRow++;
-
-                          if (runaShutterNextRow >= rows) {
-                              runaShutterNextRow = 0;
-                          }
-                      }
-                  } else {
-                      if (runaShutterWasActive) {
-                          displayClearScreen(osdDisplayPort);
-                          runaShutterWasActive = false;
-                          runaShutterNextRow = 0;
-                      }
-
-                      osdDrawNextElement();
-                  }
-
-                  displayHeartbeat(osdDisplayPort);
-                  displayCommitTransaction(osdDisplayPort);"""
-
-          new_text, count = re.subn(pattern, replacement, text, count=1)
-
-          if count != 1:
-              print("WARNING: OSD draw block not found, shutter skipped")
-              raise SystemExit(0)
-
-          path.write_text(new_text, encoding="utf-8")
-          print("RUNA OSD shutter patched on Layout 2")
-          PY
-
-      - name: Patch VTX 3.3GHz table
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("src/main/io/vtx_string.c")
-
-          if not path.exists():
-              print("vtx_string.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8")
-
-          def sub_once(text, pattern, repl, name, flags=0):
-              new_text, count = re.subn(pattern, repl, text, count=1, flags=flags)
-              print(f"{name}: patch count = {count}")
-              return new_text if count else text
-
-          text = sub_once(
-              text,
-              r"#define\s+VTX_STRING_1G3_BAND_COUNT\s+\d+",
-              "#define VTX_STRING_1G3_BAND_COUNT 6",
-              "1G3 band count"
-          )
-
-          text = sub_once(
-              text,
-              r"#define\s+VTX_STRING_1G3_POWER_COUNT\s+\d+",
-              "#define VTX_STRING_1G3_POWER_COUNT 5",
-              "1G3 power count"
-          )
-
-          text = sub_once(
-              text,
-              r"const\s+uint16_t\s+vtx1G3frequencyTable\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\]\s*\[\s*VTX_STRING_1G3_CHAN_COUNT\s*\]\s*=\s*\{.*?\};",
-              """const uint16_t vtx1G3frequencyTable[VTX_STRING_1G3_BAND_COUNT][VTX_STRING_1G3_CHAN_COUNT] = {
-              { 3083, 3114, 3145, 3176, 3207, 3238, 3269, 3300 },
-              { 3215, 3235, 3255, 3275, 3295, 3315, 3335, 3355 },
-              { 3170, 3190, 3210, 3230, 3250, 3270, 3290, 3310 },
-              { 3320, 3345, 3370, 3395, 3420, 3445, 3470, 3495 },
-              { 3310, 3330, 3355, 3380, 3405, 3430, 3455, 3480 },
-              { 3330, 3350, 3370, 3390, 3410, 3430, 3450, 3470 },
-          };""",
-              "3.3GHz frequency table",
-              flags=re.S
-          )
-
-          text = sub_once(
-              text,
-              r"const\s+char\s*\*\s+const\s+vtx1G3BandNames\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              """const char * const vtx1G3BandNames[VTX_STRING_1G3_BAND_COUNT + 1] = {
-              "-", "A", "B", "C", "D", "E", "F",
-          };""",
-              "3.3GHz band names",
-              flags=re.S
-          )
-
-          text = sub_once(
-              text,
-              r'const\s+char\s+vtx1G3BandLetter\s*\[\s*VTX_STRING_1G3_BAND_COUNT\s*\+\s*1\s*\]\s*=\s*".*?";',
-              'const char vtx1G3BandLetter[VTX_STRING_1G3_BAND_COUNT + 1] = "-ABCDEF";',
-              "3.3GHz band letters"
-          )
-
-          text = sub_once(
-              text,
-              r"const\s+char\s*\*\s+const\s+vtx1G3DefaultPowerNames\s*\[\s*VTX_STRING_1G3_POWER_COUNT\s*\+\s*1\s*\]\s*=\s*\{.*?\};",
-              """const char * const vtx1G3DefaultPowerNames[VTX_STRING_1G3_POWER_COUNT + 1] = {
-              "---", "25", "200", "400", "800", "MAX"
-          };""",
-              "3.3GHz power names",
-              flags=re.S
-          )
-
-          path.write_text(text, encoding="utf-8")
-          print("RUNA VTX 3.3GHz table patched")
           PY
 
       - name: Configure CMake
@@ -498,11 +253,11 @@ jobs:
             echo "Target found: ${TARGET}"
           else
             echo "TARGET NOT FOUND: ${TARGET}"
-            make help | grep -i -E "CADDX|SPEEDYBEE|F405|WING|RUNA" || true
+            make help | grep -i -E "CADDX|SPEEDYBEE|F405|WING" || true
             exit 1
           fi
 
-      - name: Build RUNA FC45 FINAL firmware
+      - name: Build firmware
         run: |
           cd inav/build
           make clean_${TARGET} || true
@@ -514,7 +269,7 @@ jobs:
           echo "Built firmware files:"
           find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
 
-      - name: Collect firmware and CLI files
+      - name: Collect firmware and CLI
         run: |
           mkdir -p out
 
@@ -522,7 +277,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="out/RUNA_FC45_FINAL_${base}"
+            dst="out/RUNA_FC45_LSM6DXX_SCAN_${{ matrix.name }}_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -534,80 +289,38 @@ jobs:
             exit 1
           fi
 
-          cat > out/RUNA_FC45_FINAL_BASE_NO_GPS.cli <<'EOF'
+          cat > out/RUNA_FC45_LSM6DXX_SCAN_${{ matrix.name }}.cli <<'EOF'
           batch start
 
-          # RUNA FC4.5 FINAL BASE NO GPS
-          # Working dump:
-          # Target: CADDXF405_WING
-          # ACC/GYRO: LSM6DXX
-          # BARO: SPL06
-          # MAG: HMC5883
-          # align_board_yaw: 1800
+          # RUNA FC4.5 LSM6DXX CLEAN SCAN
+          # Variant:
+          # SPI = ${{ matrix.spi }}
+          # CS  = ${{ matrix.cs }}
 
-          servo 1 850 2150 1670 -125
-          servo 2 1000 2000 1500 -110
-          servo 3 1000 2000 1500 -110
-          servo 4 1000 2000 1200 100
-          servo 5 1000 2000 1200 100
-
-          feature MOTOR_STOP
-          feature PWM_OUTPUT_ENABLE
-          feature FW_AUTOTRIM
-          feature OSD
-          feature TELEMETRY
-          feature CURRENT_METER
-          feature BLACKBOX
-          feature VTX
           feature -GPS
+          feature OSD
+          feature PWM_OUTPUT_ENABLE
 
-          serial 1 2 115200 115200 0 115200
-          serial 4 4096 115200 115200 0 115200
+          set acc_hardware = LSM6DXX
+          set baro_hardware = SPL06
+          set mag_hardware = HMC5883
+          set align_mag = CW0FLIP
 
-          aux 0 0 0 1500 2100
-          aux 1 1 2 900 1300
-          aux 2 3 2 1300 1700
-          aux 3 5 2 1300 1700
-          aux 4 35 2 1300 1700
-          aux 5 36 2 900 1300
-          aux 6 42 3 1700 2100
-          aux 7 47 0 900 2100
-          aux 8 48 3 1700 2100
-          aux 9 57 3 1700 2100
-
-          set gyro_main_lpf_hz = 25
-          set dynamic_gyro_notch_q = 250
-          set dynamic_gyro_notch_min_hz = 30
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 1800
 
           set gyro_zero_x = 0
           set gyro_zero_y = 0
           set gyro_zero_z = 0
 
-          set acc_hardware = LSM6DXX
           set acczero_x = 0
           set acczero_y = 0
           set acczero_z = 0
+
           set accgain_x = 4096
           set accgain_y = 4096
           set accgain_z = 4096
-
-          set baro_hardware = SPL06
-
-          set mag_hardware = HMC5883
-          set align_mag = CW0FLIP
-          set align_mag_roll = 0
-          set align_mag_pitch = 0
-          set align_mag_yaw = 0
-          set magzero_x = -143
-          set magzero_y = -757
-          set magzero_z = -298
-          set maggain_x = 2219
-          set maggain_y = 1888
-          set maggain_z = 1568
-
-          set align_board_roll = 0
-          set align_board_pitch = 0
-          set align_board_yaw = 1800
 
           set vbat_adc_channel = 1
           set rssi_adc_channel = 4
@@ -616,217 +329,24 @@ jobs:
 
           set receiver_type = SERIAL
           set serialrx_provider = CRSF
-          set rc_filter_auto = OFF
-          set deadband = 32
 
-          set max_throttle = 2000
-          set motor_pwm_protocol = STANDARD
-          set failsafe_procedure = NONE
-          set current_meter_scale = 160
-          set small_angle = 180
-          set disarm_kill_switch = OFF
-          set applied_defaults = 3
-
-          # No GPS flying
-          set gps_auto_config = OFF
-          set gps_auto_baud = OFF
-          set gps_min_sats = 0
           set nav_extra_arming_safety = OFF
-          set nav_rth_allow_landing = NEVER
-
-          set airmode_type = STICK_CENTER_ONCE
-          set inav_w_z_baro_p =  0.350
-
-          set nav_wp_radius = 5000
-          set nav_wp_max_safe_distance = 500
-          set nav_rth_altitude = 5000
-          set nav_fw_climb_angle = 12
-          set nav_fw_control_smoothness = 2
-          set nav_fw_launch_motor_delay = 1
-          set nav_fw_launch_spinup_time = 250
-          set nav_fw_launch_end_time = 5000
-          set nav_fw_launch_timeout = 50000
-          set nav_fw_launch_max_altitude = 5000
-          set nav_fw_launch_climb_angle = 15
-
-          set pilot_name = FIRE!!!
-          set pinio_box1 = 47
-          set pinio_box2 = 255
-          set pinio_box3 = 57
-          set pinio_box4 = 255
-
-          mixer_profile 1
-
-          set platform_type = AIRPLANE
-          set has_flaps = ON
-          set model_preview_type = 26
-
-          mmix reset
-          mmix 0  1.000  0.000  0.000 -0.500
-          mmix 1  1.000  0.000  0.000  0.500
-
-          smix reset
-          smix 0 1 1 100 0 -1
-          smix 1 2 0 100 0 -1
-          smix 2 3 0 100 0 -1
-          smix 3 4 11 100 0 -1
-
-          profile 1
-
-          set fw_p_pitch = 15
-          set fw_i_pitch = 5
-          set fw_d_pitch = 5
-          set fw_ff_pitch = 80
-          set fw_p_roll = 15
-          set fw_i_roll = 3
-          set max_angle_inclination_rll = 450
-          set dterm_lpf_hz = 10
-          set fw_turn_assist_yaw_gain =  2.000
-          set fw_turn_assist_pitch_gain =  0.600
-          set nav_fw_pos_z_p = 25
-          set nav_fw_pos_z_d = 8
-          set nav_fw_pos_xy_p = 55
-          set d_boost_min =  1.000
-          set d_boost_max =  1.000
-          set rc_expo = 30
-          set rc_yaw_expo = 30
-          set roll_rate = 18
-          set pitch_rate = 9
-          set yaw_rate = 3
-
-          battery_profile 1
-
-          set bat_cells = 6
-          set vbat_cell_detect_voltage = 435
-          set vbat_max_cell_voltage = 435
-          set throttle_idle =  5.000
-          set nav_mc_hover_thr = 1600
-          set nav_fw_cruise_thr = 1650
-          set nav_fw_min_thr = 1550
-          set nav_fw_max_thr = 1800
-          set nav_fw_pitch2thr = 6
-          set nav_fw_launch_thr = 2000
-          set nav_fw_launch_idle_thr = 1750
-          set limit_cont_current = 1470
-          set limit_burst_current = 1520
-          set limit_burst_current_time = 2000
-          set limit_burst_current_falldown_time = 3000
-
-          mixer_profile 1
-          profile 1
-          battery_profile 1
+          set failsafe_procedure = NONE
+          set small_angle = 180
 
           save
           EOF
 
-          cat > out/RUNA_FC45_VTX_5G8_5820_5695_5733.cli <<'EOF'
-          batch start
+          cat > out/README_${{ matrix.name }}.txt <<'EOF'
+          RUNA FC45 LSM6DXX CLEAN SCAN
 
-          feature VTX
+          Variant:
+          SPI = ${{ matrix.spi }}
+          CS  = ${{ matrix.cs }}
 
-          # UART5 / TX5 -> IRC Tramp
-          serial 4 4096 115200 115200 0 115200
+          Flash HEX from this archive.
 
-          set vtx_frequency_group = FREQUENCYGROUP_5G8
-
-          # Start channel: FATSHARK F5 / 5820 MHz
-          set vtx_band = 4
-          set vtx_channel = 5
-
-          # Power 5 when armed, low power on disarm
-          set vtx_power = 5
-          set vtx_low_power_disarm = ON
-          set vtx_pit_mode_chan = 1
-          set vtx_max_power_override = 0
-
-          set vtx_halfduplex = ON
-          set vtx_smartaudio_early_akk_workaround = ON
-          set vtx_smartaudio_alternate_softserial_method = ON
-          set vtx_softserial_shortstop = OFF
-          set vtx_smartaudio_stopbits = 2
-
-          logic 0 0 -1 0 0 0 0 0 0
-          logic 1 0 -1 0 0 0 0 0 0
-          logic 2 0 -1 0 0 0 0 0 0
-          logic 3 0 -1 0 0 0 0 0 0
-          logic 4 0 -1 0 0 0 0 0 0
-          logic 5 0 -1 0 0 0 0 0 0
-          logic 6 0 -1 0 0 0 0 0 0
-          logic 7 0 -1 0 0 0 0 0 0
-          logic 8 0 -1 0 0 0 0 0 0
-
-          # CH6 LOW / MID / HIGH detectors
-          logic 0 1 -1 4 1 6 0 0 0
-          logic 1 1 -1 5 1 6 0 0 0
-          logic 2 1 -1 6 1 6 0 0 0
-
-          # LOW -> 5820 MHz = FatShark F5
-          logic 3 1 0 30 0 4 0 0 0
-          logic 4 1 0 31 0 5 0 0 0
-
-          # MID -> 5695 MHz = RaceBand R2
-          logic 5 1 1 30 0 5 0 0 0
-          logic 6 1 1 31 0 2 0 0 0
-
-          # HIGH -> 5733 MHz = Band B CH1
-          logic 7 1 2 30 0 2 0 0 0
-          logic 8 1 2 31 0 1 0 0 0
-
-          save
-          EOF
-
-          cat > out/RUNA_FC45_VTX_3G3.cli <<'EOF'
-          batch start
-
-          feature VTX
-
-          # RUNA 3.3GHz uses patched FREQUENCYGROUP_1G3 table
-          set vtx_frequency_group = FREQUENCYGROUP_1G3
-          set vtx_band = 1
-          set vtx_channel = 1
-          set vtx_power = 5
-          set vtx_low_power_disarm = ON
-          set vtx_halfduplex = ON
-          set vtx_smartaudio_early_akk_workaround = ON
-          set vtx_smartaudio_alternate_softserial_method = ON
-          set vtx_smartaudio_stopbits = 2
-
-          save
-          EOF
-
-          cat > out/README_RUNA_FC45_FINAL.txt <<'EOF'
-          RUNA FC45 FINAL
-
-          Base:
-          - INAV 7.1.2
-          - Created target: CADDXF405_WING from SPEEDYBEEF405WING
-          - Display name via MSP: CADDX45+RUNA
-
-          Working FC4.5 dump:
-          - ACC/GYRO: LSM6DXX
-          - BARO: SPL06
-          - MAG: HMC5883
-          - align_mag: CW0FLIP
-          - align_board_yaw: 1800
-
-          Added:
-          - RUNAv.45 startup OSD text
-          - RUNA OSD shutter on Layout 2
-          - VTX 3.3GHz table
-          - VTX 5.8 switching:
-            CH6 LOW  = 5820 MHz
-            CH6 MID  = 5695 MHz
-            CH6 HIGH = 5733 MHz
-          - GPS disabled in base CLI
-          - nav_extra_arming_safety = OFF
-
-          Flash:
-          1. INAV Configurator 7.1.x
-          2. DFU mode
-          3. Full Chip Erase
-          4. Flash RUNA_FC45_FINAL_*.hex
-
-          After flash:
+          After flashing:
           1. CLI:
              defaults
              save
@@ -834,7 +354,7 @@ jobs:
           2. Wait 15 seconds without touching board.
 
           3. Apply:
-             RUNA_FC45_FINAL_BASE_NO_GPS.cli
+             RUNA_FC45_LSM6DXX_SCAN_${{ matrix.name }}.cli
 
           4. Calibrate accelerometer manually:
              Calibration -> Calibrate Accelerometer
@@ -843,28 +363,27 @@ jobs:
              status
              get align_board
 
-          Required:
+          Good result:
           - GYRO=OK
           - ACC=OK
           - BARO=OK
           - MAG=OK
-          - HWFAIL absent
-          - align_board_yaw = 1800
+          - 3D model does NOT spin by itself
+          - axes can be corrected by align_board_yaw if needed
 
-          Then apply VTX preset:
-          - RUNA_FC45_VTX_5G8_5820_5695_5733.cli
-
-          OSD shutter:
-          - Layout 2 = shutter mode
+          Bad result:
+          - GYRO=UNAVAILABLE
+          - ACC=UNAVAILABLE
+          - 3D model spins fast
+          - HWFAIL
 
           Test without propeller.
           EOF
 
-          echo "OUT files:"
           ls -lah out
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-FINAL
+          name: RUNA-FC45-LSM6DXX-SCAN-${{ matrix.name }}
           path: out/*
