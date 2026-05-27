@@ -1,4 +1,4 @@
-name: Build RUNA FC45 from PR TEST
+name: Build RUNA FC45 PR GyroAlign TEST
 
 on:
   workflow_dispatch:
@@ -54,6 +54,7 @@ jobs:
           done
 
           test -d inav || exit 1
+
           cd inav
           echo "Commit:"
           git rev-parse HEAD
@@ -70,12 +71,47 @@ jobs:
           if [ ! -d "src/main/target/${TARGET}" ]; then
             echo "ERROR: target directory not found: src/main/target/${TARGET}"
             echo "Available similar targets:"
-            find src/main/target -maxdepth 1 -type d | grep -i -E "CAD|CADD|F405|SPEEDY" || true
+            find src/main/target -maxdepth 1 -type d | grep -i -E "CAD|CADD|F405|SPEEDY|WING" || true
             exit 1
           fi
 
           echo "===== target.h important lines ====="
           grep -n -E "LSM6DXX|ICM42605|BMI270|MPU6000|MPU6500|SPL06|HMC5883|SPI_BUS|CS_PIN|I2C|ALIGN" src/main/target/${TARGET}/target.h || true
+
+      - name: Patch LSM6DXX gyroAlign fix
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
+
+          if not path.exists():
+              raise SystemExit("ERROR: accgyro_lsm6dxx.c not found")
+
+          text = path.read_text(encoding="utf-8")
+
+          fix = "gyro->gyroAlign = gyro->busDev->param;"
+
+          if fix in text:
+              print("LSM6DXX gyroAlign fix already present")
+          else:
+              old = "gyro->intStatusFn = gyroCheckDataReady;"
+              new = "gyro->intStatusFn = gyroCheckDataReady;\n    gyro->gyroAlign = gyro->busDev->param;"
+
+              if old not in text:
+                  raise SystemExit("ERROR: Pattern not found: gyro->intStatusFn = gyroCheckDataReady;")
+
+              text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+              print("LSM6DXX gyroAlign fix added")
+
+          print("===== gyroAlign check =====")
+          for line in text.splitlines():
+              if "gyroAlign" in line or "gyroCheckDataReady" in line:
+                  print(line)
+          PY
 
       - name: Patch RUNA name in MSP
         run: |
@@ -284,7 +320,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="out/RUNA_FC45_PR_TEST_${base}"
+            dst="out/RUNA_FC45_GYROALIGN_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -296,13 +332,11 @@ jobs:
             exit 1
           fi
 
-          cat > out/RUNA_FC45_PR_TEST_BASE_NO_GPS.cli <<'EOF'
+          cat > out/RUNA_FC45_GYROALIGN_BASE_NO_GPS.cli <<'EOF'
           batch start
 
-          # RUNA FC4.5 PR TEST BASE NO GPS
-          # Base from mailform2022/inav PR branch
+          # RUNA FC4.5 GYROALIGN TEST BASE NO GPS
           # Target: CADDXF405_WING
-          # From your working dump:
           # ACC/GYRO: LSM6DXX
           # BARO: SPL06
           # MAG: HMC5883
@@ -539,19 +573,17 @@ jobs:
           save
           EOF
 
-          cat > out/README_RUNA_FC45_PR_TEST.txt <<'EOF'
-          RUNA FC45 PR TEST
+          cat > out/README_RUNA_FC45_GYROALIGN_TEST.txt <<'EOF'
+          RUNA FC45 GYROALIGN TEST
 
           Source:
-          - https://github.com/mailform2022/inav
+          - mailform2022/inav
           - Branch: devin/1779334285-vtx-3g3-7x
           - Target: CADDXF405_WING
 
-          Important:
-          This is a TEST build from PR branch.
-          CADDXF405_WING pin mapping was marked as unverified in PR description.
-
           Added in this workflow:
+          - LSM6DXX gyroAlign fix:
+            gyro->gyroAlign = gyro->busDev->param;
           - MSP display name: CADDX45+RUNA
           - Startup OSD text: RUNAv.45
           - RUNA OSD shutter on Layout 2
@@ -565,7 +597,7 @@ jobs:
           1. INAV Configurator 7.1.x
           2. DFU
           3. Full Chip Erase
-          4. Flash RUNA_FC45_PR_TEST_*.hex
+          4. Flash RUNA_FC45_GYROALIGN_*.hex
 
           After flash:
           1. CLI:
@@ -575,7 +607,7 @@ jobs:
           2. Wait 15 seconds without touching board.
 
           3. Apply:
-             RUNA_FC45_PR_TEST_BASE_NO_GPS.cli
+             RUNA_FC45_GYROALIGN_BASE_NO_GPS.cli
 
           4. Calibrate accelerometer manually:
              Calibration -> Calibrate Accelerometer
@@ -590,9 +622,12 @@ jobs:
           - BARO=OK
           - MAG=OK
           - 3D model does NOT spin fast
+          - axes are correct
 
           If 3D model spins fast:
           Do NOT fly. This target still does not match your FC4.5 hardware.
+
+          Test without propeller.
           EOF
 
           echo "OUT files:"
@@ -601,5 +636,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-PR-TEST
+          name: RUNA-FC45-GYROALIGN-TEST
           path: out/*
