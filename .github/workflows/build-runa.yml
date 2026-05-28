@@ -1,4 +1,4 @@
-name: Build RUNA FC45 TRUE 8.0.1 V2
+name: Build RUNA FC45 TRUE 8.0.1 V3
 
 on:
   workflow_dispatch:
@@ -95,7 +95,7 @@ jobs:
 
           echo "Created target ${TARGET} from ${BASE_TARGET}"
 
-      - name: Patch target hardware from working FC4.5 resource
+      - name: Patch target.h hardware from working FC4.5
         run: |
           cd inav
 
@@ -215,10 +215,10 @@ jobs:
           for pattern in remove_patterns:
               text = re.sub(pattern, "", text, flags=re.M)
 
-          text += f"""
-
+          add = f"""
+          
           /*
-           * RUNA FC4.5 TRUE 8.0.1 V2
+           * RUNA FC4.5 TRUE 8.0.1 V3
            *
            * Working FC data:
            * GYRO/ACC: LSM6DXX
@@ -290,6 +290,8 @@ jobs:
           #define SDCARD_SPI_CS_PIN PC14
           """
 
+          text += add
+
           path.write_text(text, encoding="utf-8")
 
           print("===== target.h important lines =====")
@@ -336,40 +338,57 @@ jobs:
           target = os.environ["TARGET"]
           path = Path(f"src/main/target/{target}/target.c")
 
-          if not path.exists():
-              text = """#include "platform.h"
-
-#include "drivers/bus.h"
-#include "drivers/bus_spi.h"
-"""
-          else:
+          if path.exists():
               text = path.read_text(encoding="utf-8", errors="ignore")
+          else:
+              text = ""
 
-          # Remove old copied IMU bus registrations from base target if any.
+          if '#include "platform.h"' not in text:
+              text = '#include "platform.h"\n' + text
+
+          if '#include "drivers/bus.h"' not in text:
+              text = '#include "drivers/bus.h"\n' + text
+
+          if '#include "drivers/bus_spi.h"' not in text:
+              text = '#include "drivers/bus_spi.h"\n' + text
+
+          if '#include "target.h"' not in text:
+              text = '#include "target.h"\n' + text
+
           text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*mpu.*\n', '', text, flags=re.M | re.I)
           text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*icm.*\n', '', text, flags=re.M | re.I)
           text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*bmi.*\n', '', text, flags=re.M | re.I)
           text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*lsm.*\n', '', text, flags=re.M | re.I)
 
-          if '#include "drivers/bus.h"' not in text:
-              text = '#include "drivers/bus.h"\n' + text
-          if '#include "drivers/bus_spi.h"' not in text:
-              text = '#include "drivers/bus_spi.h"\n' + text
+          # Pick existing DEVHW enum name automatically.
+          search_files = [
+              Path("src/main/target/common_hardware.c"),
+              Path("src/main/drivers/bus.h"),
+              Path("src/main/drivers/bus_spi.h"),
+              Path("src/main/target/common_hardware.h"),
+          ]
 
-          text += """
+          all_src = ""
 
-/*
- * RUNA FC4.5 TRUE 8.0.1 V2
- * Explicit IMU bus registration.
- *
- * INAV common_hardware uses DEVHW_LSM6D for LSM6DXX.
- */
-BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6DXX_CS_PIN, NONE, 0, DEVFLAGS_NONE, IMU_LSM6DXX_ALIGN);
-"""
+          for p in search_files:
+              if p.exists():
+                  all_src += p.read_text(encoding="utf-8", errors="ignore") + "\n"
+
+          if "DEVHW_LSM6DXX" in all_src:
+              devhw = "DEVHW_LSM6DXX"
+          elif "DEVHW_LSM6D" in all_src:
+              devhw = "DEVHW_LSM6D"
+          else:
+              devhw = "DEVHW_LSM6D"
+
+          text += "\n"
+          text += "/* RUNA FC4.5 TRUE 8.0.1 V3 IMU registration */\n"
+          text += f"BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, {devhw}, LSM6DXX_SPI_BUS, LSM6DXX_CS_PIN, NONE, 0, DEVFLAGS_NONE, IMU_LSM6DXX_ALIGN);\n"
 
           path.write_text(text, encoding="utf-8")
 
-          print("===== target.c =====")
+          print("Selected DEVHW:", devhw)
+          print("===== target.c patched =====")
           print(text)
           PY
 
@@ -387,21 +406,22 @@ BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6D
               raise SystemExit(0)
 
           text = path.read_text(encoding="utf-8", errors="ignore")
-
-          # Since we explicitly register LSM6DXX in target.c, disable the generic
-          # common_hardware LSM6DXX bus registration to avoid duplicate busdev names.
           marker = "RUNA_DISABLE_COMMON_LSM6DXX_REG"
 
           if marker not in text:
               lines = []
+
               for line in text.splitlines():
-                  if "busdev_lsm6dxx" in line and "BUSDEV_REGISTER_SPI" in line:
+                  low = line.lower()
+
+                  if "busdev" in low and "lsm" in low and "busdev_register_spi" in low:
                       lines.append("/* " + marker + " " + line + " */")
                   else:
                       lines.append(line)
+
               text = "\n".join(lines) + "\n"
               path.write_text(text, encoding="utf-8")
-              print("common_hardware LSM6DXX registration disabled")
+              print("common_hardware LSM6DXX registration disabled if present")
           else:
               print("common_hardware LSM6DXX already disabled")
           PY
@@ -555,7 +575,7 @@ BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6D
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="out/RUNA_FC45_TRUE_8_0_1_V2_${{ matrix.name }}_${base}"
+            dst="out/RUNA_FC45_TRUE_8_0_1_V3_${{ matrix.name }}_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -567,22 +587,12 @@ BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6D
             exit 1
           fi
 
-          cat > out/RUNA_FC45_TRUE_8_0_1_V2_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
+          cat > out/RUNA_FC45_TRUE_8_0_1_V3_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
           batch start
 
-          # RUNA FC4.5 TRUE 8.0.1 V2
+          # RUNA FC4.5 TRUE 8.0.1 V3
           # Variant: ${{ matrix.name }}
           # IMU align: ${{ matrix.imu_align }}
-          #
-          # Working FC:
-          # GYRO/ACC = LSM6DXX
-          # BARO = DPS310
-          # MAG = HMC5883
-          # IMU SPI1 PA4
-          # I2C1 PB8/PB9
-          # OSD SPI2 PB12
-          #
-          # Do not fly until 3D model is correct.
 
           feature -GPS
           feature OSD
@@ -593,7 +603,6 @@ BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6D
           feature PWM_OUTPUT_ENABLE
           feature VTX
 
-          # Ports from working FC4.5
           serial 20 1 115200 115200 0 115200
           serial 0 64 115200 115200 0 115200
           serial 1 0 115200 115200 0 115200
@@ -671,12 +680,11 @@ BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6D
           save
           EOF
 
-          cat > out/README_RUNA_FC45_TRUE_8_0_1_V2_${{ matrix.name }}.txt <<'EOF'
-          RUNA FC45 TRUE 8.0.1 V2
+          cat > out/README_RUNA_FC45_TRUE_8_0_1_V3_${{ matrix.name }}.txt <<'EOF'
+          RUNA FC45 TRUE 8.0.1 V3
 
-          This build uses the working FC4.5 data:
+          Uses working FC4.5 data:
           - INAV 8.0.1
-          - Target name: CADDXF405_45_WING
           - GYRO/ACC: LSM6DXX
           - BARO: DPS310
           - MAG: HMC5883
@@ -686,22 +694,11 @@ BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6D
           - BEEPER: PC15
           - LED: PA14 / PA13
 
-          V2 change:
-          - explicit target.c BUSDEV_REGISTER_SPI_TAG for LSM6DXX
-          - common_hardware LSM6DXX registration disabled to avoid duplicate
-          - DEVHW_LSM6D used for LSM6DXX
-
-          Variant:
-          ${{ matrix.name }}
-
-          IMU align:
-          ${{ matrix.imu_align }}
-
           Flash:
           1. INAV Configurator 8.x
           2. DFU
           3. Full chip erase
-          4. Flash this HEX
+          4. Flash HEX
 
           After flash:
           1. CLI:
@@ -710,7 +707,7 @@ BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6D
 
           2. Wait 15 seconds, do not move board.
 
-          3. Check first:
+          3. Check:
              status
              get align_board
 
@@ -719,18 +716,13 @@ BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6D
           - ACC=OK
           - BARO=OK
           - MAG=OK
-          - 3D model does not spin by itself
 
-          4. If status is good, apply:
-             RUNA_FC45_TRUE_8_0_1_V2_${{ matrix.name }}_BASE_NO_GPS.cli
+          If good:
+          - apply BASE_NO_GPS.cli
+          - check 3D model
+          - then calibrate accelerometer
 
-          5. If 3D is correct, then calibrate accelerometer.
-
-          Do not fly until:
-          - 3D model stable
-          - axes correct
-          - receiver works
-          - outputs checked without propeller
+          Do not fly until 3D and outputs are correct.
           EOF
 
           ls -lah out
@@ -738,5 +730,5 @@ BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6D
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-TRUE-8-0-1-V2-${{ matrix.name }}
+          name: RUNA-FC45-TRUE-8-0-1-V3-${{ matrix.name }}
           path: out/*
