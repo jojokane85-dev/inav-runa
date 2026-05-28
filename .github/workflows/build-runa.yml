@@ -1,4 +1,4 @@
-name: Build RUNA FC45 TRUE 8.0.1
+name: Build RUNA FC45 TRUE 8.0.1 V2
 
 on:
   workflow_dispatch:
@@ -114,7 +114,6 @@ jobs:
 
           text = path.read_text(encoding="utf-8", errors="ignore")
 
-          # Target identity
           text = re.sub(
               r'#define\s+TARGET_BOARD_IDENTIFIER\s+"[^"]+"',
               '#define TARGET_BOARD_IDENTIFIER "C45W"',
@@ -127,9 +126,7 @@ jobs:
               text
           )
 
-          # Remove old conflicting hardware definitions.
           remove_patterns = [
-              # IMU definitions
               r'^\s*#define\s+USE_IMU_MPU6000\s*$',
               r'^\s*#define\s+MPU6000_CS_PIN\s+\S+\s*$',
               r'^\s*#define\s+MPU6000_SPI_BUS\s+\S+\s*$',
@@ -166,7 +163,6 @@ jobs:
               r'^\s*#define\s+LSM6DXX_EXTI_PIN\s+\S+\s*$',
               r'^\s*#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*$',
 
-              # SPI pins
               r'^\s*#define\s+SPI1_SCK_PIN\s+\S+\s*$',
               r'^\s*#define\s+SPI1_MISO_PIN\s+\S+\s*$',
               r'^\s*#define\s+SPI1_MOSI_PIN\s+\S+\s*$',
@@ -177,21 +173,11 @@ jobs:
               r'^\s*#define\s+SPI3_MISO_PIN\s+\S+\s*$',
               r'^\s*#define\s+SPI3_MOSI_PIN\s+\S+\s*$',
 
-              # I2C pins
               r'^\s*#define\s+I2C1_SCL\s+\S+\s*$',
               r'^\s*#define\s+I2C1_SDA\s+\S+\s*$',
               r'^\s*#define\s+I2C1_SCL_PIN\s+\S+\s*$',
               r'^\s*#define\s+I2C1_SDA_PIN\s+\S+\s*$',
-              r'^\s*#define\s+I2C2_SCL\s+\S+\s*$',
-              r'^\s*#define\s+I2C2_SDA\s+\S+\s*$',
-              r'^\s*#define\s+I2C2_SCL_PIN\s+\S+\s*$',
-              r'^\s*#define\s+I2C2_SDA_PIN\s+\S+\s*$',
-              r'^\s*#define\s+I2C3_SCL\s+\S+\s*$',
-              r'^\s*#define\s+I2C3_SDA\s+\S+\s*$',
-              r'^\s*#define\s+I2C3_SCL_PIN\s+\S+\s*$',
-              r'^\s*#define\s+I2C3_SDA_PIN\s+\S+\s*$',
 
-              # Baro
               r'^\s*#define\s+USE_BARO\s*$',
               r'^\s*#define\s+USE_BARO_ALL\s*$',
               r'^\s*#define\s+USE_BARO_BMP280\s*$',
@@ -201,7 +187,6 @@ jobs:
               r'^\s*#define\s+USE_BARO_SPL06\s*$',
               r'^\s*#define\s+BARO_I2C_BUS\s+\S+\s*$',
 
-              # Mag
               r'^\s*#define\s+USE_MAG\s*$',
               r'^\s*#define\s+USE_MAG_ALL\s*$',
               r'^\s*#define\s+USE_MAG_HMC5883\s*$',
@@ -214,12 +199,10 @@ jobs:
               r'^\s*#define\s+USE_MAG_AK8975\s*$',
               r'^\s*#define\s+MAG_I2C_BUS\s+\S+\s*$',
 
-              # OSD/MAX7456
               r'^\s*#define\s+USE_MAX7456\s*$',
               r'^\s*#define\s+MAX7456_SPI_BUS\s+\S+\s*$',
               r'^\s*#define\s+MAX7456_CS_PIN\s+\S+\s*$',
 
-              # Beeper / LED / SD
               r'^\s*#define\s+BEEPER_PIN\s+\S+\s*$',
               r'^\s*#define\s+BEEPER_INVERTED\s*$',
               r'^\s*#define\s+LED0_PIN\s+\S+\s*$',
@@ -235,16 +218,14 @@ jobs:
           text += f"""
 
           /*
-           * RUNA FC4.5 TRUE 8.0.1
+           * RUNA FC4.5 TRUE 8.0.1 V2
            *
-           * Based on working board status/resource:
-           * INAV/CADDXF405_45_WING 8.0.1
-           *
+           * Working FC data:
            * GYRO/ACC: LSM6DXX
            * BARO    : DPS310
            * MAG     : HMC5883
            *
-           * Resource from working FC:
+           * Resource:
            * PA4  = MPU CS
            * PA5  = SPI1 SCK
            * PA6  = SPI1 MISO
@@ -341,6 +322,88 @@ jobs:
                   "SDCARD_SPI_CS_PIN",
               ]):
                   print(line)
+          PY
+
+      - name: Patch target.c busdev registration for LSM6DXX
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          target = os.environ["TARGET"]
+          path = Path(f"src/main/target/{target}/target.c")
+
+          if not path.exists():
+              text = """#include "platform.h"
+
+#include "drivers/bus.h"
+#include "drivers/bus_spi.h"
+"""
+          else:
+              text = path.read_text(encoding="utf-8", errors="ignore")
+
+          # Remove old copied IMU bus registrations from base target if any.
+          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*mpu.*\n', '', text, flags=re.M | re.I)
+          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*icm.*\n', '', text, flags=re.M | re.I)
+          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*bmi.*\n', '', text, flags=re.M | re.I)
+          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*lsm.*\n', '', text, flags=re.M | re.I)
+
+          if '#include "drivers/bus.h"' not in text:
+              text = '#include "drivers/bus.h"\n' + text
+          if '#include "drivers/bus_spi.h"' not in text:
+              text = '#include "drivers/bus_spi.h"\n' + text
+
+          text += """
+
+/*
+ * RUNA FC4.5 TRUE 8.0.1 V2
+ * Explicit IMU bus registration.
+ *
+ * INAV common_hardware uses DEVHW_LSM6D for LSM6DXX.
+ */
+BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, DEVHW_LSM6D, LSM6DXX_SPI_BUS, LSM6DXX_CS_PIN, NONE, 0, DEVFLAGS_NONE, IMU_LSM6DXX_ALIGN);
+"""
+
+          path.write_text(text, encoding="utf-8")
+
+          print("===== target.c =====")
+          print(text)
+          PY
+
+      - name: Patch common_hardware LSM6DXX duplicate safety
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/target/common_hardware.c")
+
+          if not path.exists():
+              print("common_hardware.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8", errors="ignore")
+
+          # Since we explicitly register LSM6DXX in target.c, disable the generic
+          # common_hardware LSM6DXX bus registration to avoid duplicate busdev names.
+          marker = "RUNA_DISABLE_COMMON_LSM6DXX_REG"
+
+          if marker not in text:
+              lines = []
+              for line in text.splitlines():
+                  if "busdev_lsm6dxx" in line and "BUSDEV_REGISTER_SPI" in line:
+                      lines.append("/* " + marker + " " + line + " */")
+                  else:
+                      lines.append(line)
+              text = "\n".join(lines) + "\n"
+              path.write_text(text, encoding="utf-8")
+              print("common_hardware LSM6DXX registration disabled")
+          else:
+              print("common_hardware LSM6DXX already disabled")
           PY
 
       - name: Patch LSM6DXX gyroAlign fix safe
@@ -452,116 +515,6 @@ jobs:
           path.write_text(text, encoding="utf-8")
           PY
 
-      - name: Patch RUNA OSD shutter on Layout 2
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("src/main/io/osd.c")
-
-          if not path.exists():
-              print("osd.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8", errors="ignore")
-
-          marker = "RUNA_OSD_SHUTTER_LAYOUT_2"
-
-          if marker in text:
-              print("RUNA OSD shutter already patched")
-              raise SystemExit(0)
-
-          pattern = r'osdDrawNextElement\(\);\s*displayHeartbeat\(osdDisplayPort\);\s*displayCommitTransaction\(osdDisplayPort\);'
-
-          replacement = r"""
-                  /*
-                   * RUNA_OSD_SHUTTER_LAYOUT_2
-                   * Layout 2 = black shutter with small center window.
-                   */
-                  static bool runaShutterWasActive = false;
-                  static uint8_t runaShutterNextRow = 0;
-
-                  if (currentLayout == 2) {
-                      textAttributes_t runaAttr = TEXT_ATTRIBUTES_NONE;
-                      TEXT_ATTRIBUTES_ADD_SOLID_BG(runaAttr);
-
-                      char runaMask[64];
-
-                      uint8_t cols = osdDisplayPort->cols;
-                      uint8_t rows = osdDisplayPort->rows;
-
-                      if (cols > 63) {
-                          cols = 63;
-                      }
-
-                      const uint8_t windowWidth = cols >= 30 ? 10 : cols / 3;
-                      const uint8_t windowHeight = rows >= 16 ? 4 : rows / 3;
-
-                      const uint8_t windowX = (cols - windowWidth) / 2;
-                      const uint8_t windowY = (rows - windowHeight) / 2;
-
-                      if (!runaShutterWasActive) {
-                          displayClearScreen(osdDisplayPort);
-                          runaShutterWasActive = true;
-                          runaShutterNextRow = 0;
-                      }
-
-                      for (uint8_t pass = 0; pass < 2; pass++) {
-                          uint8_t y = runaShutterNextRow;
-                          const bool inWindowY = (y >= windowY) && (y < windowY + windowHeight);
-
-                          if (!inWindowY) {
-                              memset(runaMask, ' ', cols);
-                              runaMask[cols] = '\0';
-                              displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
-                          } else {
-                              if (windowX > 0) {
-                                  memset(runaMask, ' ', windowX);
-                                  runaMask[windowX] = '\0';
-                                  displayWriteWithAttr(osdDisplayPort, 0, y, runaMask, runaAttr);
-                              }
-
-                              const uint8_t rightX = windowX + windowWidth;
-
-                              if (rightX < cols) {
-                                  const uint8_t rightWidth = cols - rightX;
-                                  memset(runaMask, ' ', rightWidth);
-                                  runaMask[rightWidth] = '\0';
-                                  displayWriteWithAttr(osdDisplayPort, rightX, y, runaMask, runaAttr);
-                              }
-                          }
-
-                          runaShutterNextRow++;
-
-                          if (runaShutterNextRow >= rows) {
-                              runaShutterNextRow = 0;
-                          }
-                      }
-                  } else {
-                      if (runaShutterWasActive) {
-                          displayClearScreen(osdDisplayPort);
-                          runaShutterWasActive = false;
-                          runaShutterNextRow = 0;
-                      }
-
-                      osdDrawNextElement();
-                  }
-
-                  displayHeartbeat(osdDisplayPort);
-                  displayCommitTransaction(osdDisplayPort);"""
-
-          new_text, count = re.subn(pattern, replacement, text, count=1)
-
-          if count == 1:
-              path.write_text(new_text, encoding="utf-8")
-              print("RUNA OSD shutter patched on Layout 2")
-          else:
-              print("WARNING: OSD draw block pattern not found, shutter skipped")
-          PY
-
       - name: Configure CMake
         run: |
           cd inav
@@ -602,7 +555,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="out/RUNA_FC45_TRUE_8_0_1_${{ matrix.name }}_${base}"
+            dst="out/RUNA_FC45_TRUE_8_0_1_V2_${{ matrix.name }}_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -614,14 +567,14 @@ jobs:
             exit 1
           fi
 
-          cat > out/RUNA_FC45_TRUE_8_0_1_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
+          cat > out/RUNA_FC45_TRUE_8_0_1_V2_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
           batch start
 
-          # RUNA FC4.5 TRUE 8.0.1
+          # RUNA FC4.5 TRUE 8.0.1 V2
           # Variant: ${{ matrix.name }}
           # IMU align: ${{ matrix.imu_align }}
           #
-          # Based on working FC:
+          # Working FC:
           # GYRO/ACC = LSM6DXX
           # BARO = DPS310
           # MAG = HMC5883
@@ -640,7 +593,7 @@ jobs:
           feature PWM_OUTPUT_ENABLE
           feature VTX
 
-          # Ports from working FC4.5:
+          # Ports from working FC4.5
           serial 20 1 115200 115200 0 115200
           serial 0 64 115200 115200 0 115200
           serial 1 0 115200 115200 0 115200
@@ -671,7 +624,6 @@ jobs:
           set accgain_y = 4096
           set accgain_z = 4096
 
-          # Working-like gyro/acc filters from INAV 8 dump
           set gyro_main_lpf_hz = 25
           set dynamic_gyro_notch_enabled = ON
           set dynamic_gyro_notch_q = 120
@@ -701,7 +653,6 @@ jobs:
           set vtx_low_power_disarm = ON
           set vtx_power = 5
 
-          # VTX 5.8 start frequency: 5820 MHz = FatShark F5
           set vtx_frequency_group = FREQUENCYGROUP_5G8
           set vtx_band = 4
           set vtx_channel = 5
@@ -720,67 +671,10 @@ jobs:
           save
           EOF
 
-          cat > out/RUNA_FC45_VTX_5820_5695_5733_CH6.cli <<'EOF'
-          batch start
+          cat > out/README_RUNA_FC45_TRUE_8_0_1_V2_${{ matrix.name }}.txt <<'EOF'
+          RUNA FC45 TRUE 8.0.1 V2
 
-          # RUNA VTX 5.8 channel switch
-          # CH6 LOW  = 5820 MHz = FatShark F5
-          # CH6 MID  = 5695 MHz = RaceBand R2
-          # CH6 HIGH = 5733 MHz = Band B CH1
-
-          feature VTX
-
-          # UART5 / TX5 -> VTX control, change if your wire is on another UART
-          serial 4 4096 115200 115200 0 115200
-
-          set vtx_frequency_group = FREQUENCYGROUP_5G8
-
-          set vtx_band = 4
-          set vtx_channel = 5
-          set vtx_power = 5
-          set vtx_low_power_disarm = ON
-
-          set vtx_halfduplex = ON
-          set vtx_smartaudio_early_akk_workaround = ON
-          set vtx_smartaudio_alternate_softserial_method = ON
-          set vtx_softserial_shortstop = OFF
-          set vtx_smartaudio_stopbits = 2
-
-          # clear logic 0-8
-          logic 0 0 -1 0 0 0 0 0 0
-          logic 1 0 -1 0 0 0 0 0 0
-          logic 2 0 -1 0 0 0 0 0 0
-          logic 3 0 -1 0 0 0 0 0 0
-          logic 4 0 -1 0 0 0 0 0 0
-          logic 5 0 -1 0 0 0 0 0 0
-          logic 6 0 -1 0 0 0 0 0 0
-          logic 7 0 -1 0 0 0 0 0 0
-          logic 8 0 -1 0 0 0 0 0 0
-
-          # CH6 LOW/MID/HIGH detectors
-          logic 0 1 -1 4 1 6 0 0 0
-          logic 1 1 -1 5 1 6 0 0 0
-          logic 2 1 -1 6 1 6 0 0 0
-
-          # LOW -> 5820 MHz = FatShark F5
-          logic 3 1 0 30 0 4 0 0 0
-          logic 4 1 0 31 0 5 0 0 0
-
-          # MID -> 5695 MHz = RaceBand R2
-          logic 5 1 1 30 0 5 0 0 0
-          logic 6 1 1 31 0 2 0 0 0
-
-          # HIGH -> 5733 MHz = Band B CH1
-          logic 7 1 2 30 0 2 0 0 0
-          logic 8 1 2 31 0 1 0 0 0
-
-          save
-          EOF
-
-          cat > out/README_RUNA_FC45_TRUE_8_0_1_${{ matrix.name }}.txt <<'EOF'
-          RUNA FC45 TRUE 8.0.1
-
-          This build uses the working FC4.5 hardware data:
+          This build uses the working FC4.5 data:
           - INAV 8.0.1
           - Target name: CADDXF405_45_WING
           - GYRO/ACC: LSM6DXX
@@ -791,6 +685,11 @@ jobs:
           - OSD: MAX7456 SPI2 PB12
           - BEEPER: PC15
           - LED: PA14 / PA13
+
+          V2 change:
+          - explicit target.c BUSDEV_REGISTER_SPI_TAG for LSM6DXX
+          - common_hardware LSM6DXX registration disabled to avoid duplicate
+          - DEVHW_LSM6D used for LSM6DXX
 
           Variant:
           ${{ matrix.name }}
@@ -823,7 +722,7 @@ jobs:
           - 3D model does not spin by itself
 
           4. If status is good, apply:
-             RUNA_FC45_TRUE_8_0_1_${{ matrix.name }}_BASE_NO_GPS.cli
+             RUNA_FC45_TRUE_8_0_1_V2_${{ matrix.name }}_BASE_NO_GPS.cli
 
           5. If 3D is correct, then calibrate accelerometer.
 
@@ -839,5 +738,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-TRUE-8-0-1-${{ matrix.name }}
+          name: RUNA-FC45-TRUE-8-0-1-V2-${{ matrix.name }}
           path: out/*
