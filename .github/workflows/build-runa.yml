@@ -1,4 +1,4 @@
-name: Build STM32F405 LSM6DXX Baremetal Scanner V4
+name: Build STM32F405 LED TEST
 
 on:
   workflow_dispatch:
@@ -48,8 +48,26 @@ jobs:
             led_pin: 8
             active_low: 0
 
+          - led_name: LED_PC14_LOW
+            led_port: C
+            led_pin: 14
+            active_low: 1
+          - led_name: LED_PC14_HIGH
+            led_port: C
+            led_pin: 14
+            active_low: 0
+
+          - led_name: LED_PC15_LOW
+            led_port: C
+            led_pin: 15
+            active_low: 1
+          - led_name: LED_PC15_HIGH
+            led_port: C
+            led_pin: 15
+            active_low: 0
+
     env:
-      PROJECT: stm32f405_lsm6dxx_scanner_v4
+      PROJECT: stm32f405_led_test
 
     steps:
       - name: Install deps
@@ -61,22 +79,16 @@ jobs:
             binutils-arm-none-eabi \
             python3
 
-      - name: Create baremetal scanner source
+      - name: Create LED test source
         run: |
           mkdir -p ${PROJECT}
 
           cat > ${PROJECT}/main.c <<'EOF'
           /*
-           * STM32F405 LSM6DXX baremetal scanner V4
+           * STM32F405 baremetal LED TEST
            *
-           * Diagnostic firmware only.
-           * Do not fly.
-           * Do not install propeller.
-           *
-           * V4:
-           * - startup blink test
-           * - SPI timeouts
-           * - no external libraries
+           * Diagnostic only.
+           * It only blinks one GPIO pin.
            */
 
           #include <stdint.h>
@@ -90,43 +102,15 @@ jobs:
           #define GPIOB_BASE      0x40020400UL
           #define GPIOC_BASE      0x40020800UL
 
-          #define SPI1_BASE       0x40013000UL
-          #define SPI2_BASE       0x40003800UL
-          #define SPI3_BASE       0x40003C00UL
-
           #define REG32(addr)     (*(volatile uint32_t *)(addr))
 
           #define RCC_AHB1ENR     REG32(RCC_BASE + 0x30)
-          #define RCC_APB1ENR     REG32(RCC_BASE + 0x40)
-          #define RCC_APB2ENR     REG32(RCC_BASE + 0x44)
 
           #define GPIO_MODER(p)   REG32((p) + 0x00)
           #define GPIO_OTYPER(p)  REG32((p) + 0x04)
           #define GPIO_OSPEEDR(p) REG32((p) + 0x08)
           #define GPIO_PUPDR(p)   REG32((p) + 0x0C)
           #define GPIO_BSRR(p)    REG32((p) + 0x18)
-          #define GPIO_AFRL(p)    REG32((p) + 0x20)
-          #define GPIO_AFRH(p)    REG32((p) + 0x24)
-
-          #define SPI_CR1(s)      REG32((s) + 0x00)
-          #define SPI_CR2(s)      REG32((s) + 0x04)
-          #define SPI_SR(s)       REG32((s) + 0x08)
-
-          #define SPI_SR_RXNE     (1U << 0)
-          #define SPI_SR_TXE      (1U << 1)
-          #define SPI_SR_BSY      (1U << 7)
-
-          #define LSM6DXX_WHOAMI_REG 0x0F
-
-          typedef struct {
-              uint32_t port;
-              uint8_t pin;
-          } gpio_pin_t;
-
-          typedef struct {
-              uint32_t spi;
-              uint8_t index;
-          } spi_bus_t;
 
           static void delay_cycles(volatile uint32_t n)
           {
@@ -153,32 +137,13 @@ jobs:
           {
               GPIO_MODER(port) &= ~(3U << (pin * 2));
               GPIO_MODER(port) |=  (1U << (pin * 2));
+
               GPIO_OTYPER(port) &= ~(1U << pin);
+
               GPIO_OSPEEDR(port) &= ~(3U << (pin * 2));
               GPIO_OSPEEDR(port) |=  (2U << (pin * 2));
-              GPIO_PUPDR(port) &= ~(3U << (pin * 2));
-          }
-
-          static void gpio_af(uint32_t port, uint8_t pin, uint8_t af)
-          {
-              GPIO_MODER(port) &= ~(3U << (pin * 2));
-              GPIO_MODER(port) |=  (2U << (pin * 2));
-
-              GPIO_OTYPER(port) &= ~(1U << pin);
-
-              GPIO_OSPEEDR(port) &= ~(3U << (pin * 2));
-              GPIO_OSPEEDR(port) |=  (3U << (pin * 2));
 
               GPIO_PUPDR(port) &= ~(3U << (pin * 2));
-
-              if (pin < 8) {
-                  GPIO_AFRL(port) &= ~(0xFU << (pin * 4));
-                  GPIO_AFRL(port) |=  ((uint32_t)af << (pin * 4));
-              } else {
-                  uint8_t p = pin - 8;
-                  GPIO_AFRH(port) &= ~(0xFU << (p * 4));
-                  GPIO_AFRH(port) |=  ((uint32_t)af << (p * 4));
-              }
           }
 
           static void gpio_set_pin(uint32_t port, uint8_t pin)
@@ -194,11 +159,6 @@ jobs:
           static uint32_t led_port(void)
           {
               return port_by_letter(LED_PORT_LETTER);
-          }
-
-          static void led_setup(void)
-          {
-              gpio_output(led_port(), LED_PIN_NUM);
           }
 
           static void led_on(void)
@@ -219,217 +179,30 @@ jobs:
               }
           }
 
-          static void blink_short(void)
-          {
-              led_on();
-              delay_ms(120);
-              led_off();
-              delay_ms(180);
-          }
-
-          static void blink_long(void)
-          {
-              led_on();
-              delay_ms(600);
-              led_off();
-              delay_ms(600);
-          }
-
-          static void startup_blink(void)
-          {
-              for (uint8_t i = 0; i < 5; i++) {
-                  blink_short();
-              }
-              delay_ms(1000);
-          }
-
-          static void blink_code(uint8_t code)
-          {
-              if (code == 0) {
-                  while (1) {
-                      blink_long();
-                  }
-              }
-
-              while (1) {
-                  for (uint8_t i = 0; i < code; i++) {
-                      blink_short();
-                  }
-
-                  delay_ms(1400);
-              }
-          }
-
-          static const spi_bus_t spi_buses[] = {
-              { SPI1_BASE, 1 },
-              { SPI2_BASE, 2 },
-              { SPI3_BASE, 3 },
-          };
-
-          static const gpio_pin_t cs_pins[] = {
-              { GPIOA_BASE, 4  },
-              { GPIOA_BASE, 15 },
-              { GPIOB_BASE, 0  },
-              { GPIOB_BASE, 1  },
-              { GPIOB_BASE, 2  },
-              { GPIOB_BASE, 12 },
-              { GPIOC_BASE, 4  },
-              { GPIOC_BASE, 13 },
-              { GPIOC_BASE, 14 },
-              { GPIOC_BASE, 15 },
-          };
-
           static void clocks_setup(void)
           {
+              /*
+               * Enable GPIOA / GPIOB / GPIOC clocks.
+               */
               RCC_AHB1ENR |= (1U << 0) | (1U << 1) | (1U << 2);
-              RCC_APB2ENR |= (1U << 12);
-              RCC_APB1ENR |= (1U << 14) | (1U << 15);
               delay_ms(10);
-          }
-
-          static void cs_setup_all(void)
-          {
-              for (unsigned i = 0; i < sizeof(cs_pins) / sizeof(cs_pins[0]); i++) {
-                  gpio_output(cs_pins[i].port, cs_pins[i].pin);
-                  gpio_set_pin(cs_pins[i].port, cs_pins[i].pin);
-              }
-          }
-
-          static void cs_low(gpio_pin_t cs)
-          {
-              gpio_clear_pin(cs.port, cs.pin);
-          }
-
-          static void cs_high(gpio_pin_t cs)
-          {
-              gpio_set_pin(cs.port, cs.pin);
-          }
-
-          static void spi_gpio_setup(uint32_t spi)
-          {
-              if (spi == SPI1_BASE) {
-                  gpio_af(GPIOA_BASE, 5, 5);
-                  gpio_af(GPIOA_BASE, 6, 5);
-                  gpio_af(GPIOA_BASE, 7, 5);
-              } else if (spi == SPI2_BASE) {
-                  gpio_af(GPIOB_BASE, 13, 5);
-                  gpio_af(GPIOB_BASE, 14, 5);
-                  gpio_af(GPIOB_BASE, 15, 5);
-              } else if (spi == SPI3_BASE) {
-                  gpio_af(GPIOC_BASE, 10, 6);
-                  gpio_af(GPIOC_BASE, 11, 6);
-                  gpio_af(GPIOC_BASE, 12, 6);
-              }
-          }
-
-          static void spi_setup(uint32_t spi)
-          {
-              SPI_CR1(spi) = 0;
-              SPI_CR2(spi) = 0;
-
-              SPI_CR1(spi) =
-                  (1U << 2) |   // MSTR
-                  (7U << 3) |   // BR /256
-                  (1U << 8) |   // SSI
-                  (1U << 9) |   // SSM
-                  (1U << 1) |   // CPOL
-                  (1U << 0);    // CPHA
-
-              SPI_CR1(spi) |= (1U << 6); // SPE
-          }
-
-          static uint8_t spi_xfer8(uint32_t spi, uint8_t data)
-          {
-              uint32_t timeout = 100000;
-
-              while (!(SPI_SR(spi) & SPI_SR_TXE)) {
-                  if (--timeout == 0) {
-                      return 0xFF;
-                  }
-              }
-
-              *((volatile uint8_t *)(spi + 0x0C)) = data;
-
-              timeout = 100000;
-
-              while (!(SPI_SR(spi) & SPI_SR_RXNE)) {
-                  if (--timeout == 0) {
-                      return 0xFF;
-                  }
-              }
-
-              return *((volatile uint8_t *)(spi + 0x0C));
-          }
-
-          static uint8_t read_whoami(uint32_t spi, gpio_pin_t cs)
-          {
-              uint8_t value;
-
-              cs_high(cs);
-              delay_ms(1);
-
-              cs_low(cs);
-              delay_ms(1);
-
-              spi_xfer8(spi, LSM6DXX_WHOAMI_REG | 0x80);
-              value = spi_xfer8(spi, 0x00);
-
-              delay_ms(1);
-              cs_high(cs);
-              delay_ms(2);
-
-              return value;
-          }
-
-          static uint8_t is_lsm6dxx_id(uint8_t id)
-          {
-              return id == 0x69 ||
-                     id == 0x6A ||
-                     id == 0x6B ||
-                     id == 0x6C ||
-                     id == 0x6D;
           }
 
           int main(void)
           {
               clocks_setup();
-              led_setup();
+
+              gpio_output(led_port(), LED_PIN_NUM);
               led_off();
-
-              startup_blink();
-
-              cs_setup_all();
 
               delay_ms(1000);
 
-              uint8_t variant = 1;
-
-              for (unsigned b = 0; b < sizeof(spi_buses) / sizeof(spi_buses[0]); b++) {
-                  uint32_t spi = spi_buses[b].spi;
-
-                  spi_gpio_setup(spi);
-                  spi_setup(spi);
-
-                  for (unsigned c = 0; c < sizeof(cs_pins) / sizeof(cs_pins[0]); c++) {
-                      gpio_pin_t cs = cs_pins[c];
-
-                      for (uint8_t attempt = 0; attempt < 10; attempt++) {
-                          uint8_t id = read_whoami(spi, cs);
-
-                          if (is_lsm6dxx_id(id)) {
-                              blink_code(variant);
-                          }
-
-                          delay_ms(20);
-                      }
-
-                      variant++;
-                  }
-
-                  SPI_CR1(spi) &= ~(1U << 6);
+              while (1) {
+                  led_on();
+                  delay_ms(250);
+                  led_off();
+                  delay_ms(250);
               }
-
-              blink_code(0);
           }
           EOF
 
@@ -542,7 +315,7 @@ jobs:
           EOF
 
           cat > ${PROJECT}/Makefile <<'EOF'
-          PROJECT = scanner
+          PROJECT = led_test
           BUILD_DIR = build
 
           PREFIX ?= arm-none-eabi
@@ -583,7 +356,7 @@ jobs:
           	rm -rf $(BUILD_DIR)
           EOF
 
-      - name: Build scanner
+      - name: Build LED test
         run: |
           cd ${PROJECT}
           make clean
@@ -593,87 +366,38 @@ jobs:
         run: |
           mkdir -p out
 
-          cp ${PROJECT}/build/scanner.bin out/STM32F405_LSM6DXX_SCANNER_V4_${{ matrix.led_name }}.bin
-          cp ${PROJECT}/build/scanner.hex out/STM32F405_LSM6DXX_SCANNER_V4_${{ matrix.led_name }}.hex
-          cp ${PROJECT}/build/scanner.elf out/STM32F405_LSM6DXX_SCANNER_V4_${{ matrix.led_name }}.elf
+          cp ${PROJECT}/build/led_test.bin out/STM32F405_LED_TEST_${{ matrix.led_name }}.bin
+          cp ${PROJECT}/build/led_test.hex out/STM32F405_LED_TEST_${{ matrix.led_name }}.hex
+          cp ${PROJECT}/build/led_test.elf out/STM32F405_LED_TEST_${{ matrix.led_name }}.elf
 
           cat > out/README_${{ matrix.led_name }}.txt <<'EOF'
-          STM32F405 LSM6DXX BAREMETAL SCANNER V4
+          STM32F405 LED TEST
 
-          Diagnostic firmware only.
-          Do not fly.
-          Do not install propeller.
+          Diagnostic only.
 
-          First:
-          - Scanner should blink 5 quick times after boot.
-          - This means firmware started.
+          LED variant:
+          ${{ matrix.led_name }}
 
-          Then:
-          - Sensor found:
-            LED blinks variant number repeatedly.
-          - Sensor not found:
-            LED slow-blinks forever.
+          Expected result:
+          - LED should blink every 0.25 seconds.
 
-          Scanned SPI:
-          - SPI1: PA5 SCK, PA6 MISO, PA7 MOSI
-          - SPI2: PB13 SCK, PB14 MISO, PB15 MOSI
-          - SPI3: PC10 SCK, PC11 MISO, PC12 MOSI
+          If LED is just ON:
+          - Try opposite active mode:
+            LOW <-> HIGH
 
-          CS pins:
-          PA4, PA15, PB0, PB1, PB2, PB12, PC4, PC13, PC14, PC15
+          If no blink on all variants:
+          - LED pin is different
+          - or firmware is not starting correctly
+          - or board has no LED on tested pins
 
-          WHO_AM_I:
-          register 0x0F
-
-          Accepted IDs:
-          0x69, 0x6A, 0x6B, 0x6C, 0x6D
-
-          Variant mapping:
-           1  = SPI1 PA4
-           2  = SPI1 PA15
-           3  = SPI1 PB0
-           4  = SPI1 PB1
-           5  = SPI1 PB2
-           6  = SPI1 PB12
-           7  = SPI1 PC4
-           8  = SPI1 PC13
-           9  = SPI1 PC14
-           10 = SPI1 PC15
-
-           11 = SPI2 PA4
-           12 = SPI2 PA15
-           13 = SPI2 PB0
-           14 = SPI2 PB1
-           15 = SPI2 PB2
-           16 = SPI2 PB12
-           17 = SPI2 PC4
-           18 = SPI2 PC13
-           19 = SPI2 PC14
-           20 = SPI2 PC15
-
-           21 = SPI3 PA4
-           22 = SPI3 PA15
-           23 = SPI3 PB0
-           24 = SPI3 PB1
-           25 = SPI3 PB2
-           26 = SPI3 PB12
-           27 = SPI3 PC4
-           28 = SPI3 PC13
-           29 = SPI3 PC14
-           30 = SPI3 PC15
-
-          How to use:
-          1. Put board in DFU mode.
-          2. Flash HEX.
-          3. Watch LED.
-          4. If 5 quick blinks then slow blink = scanner works, sensor not found.
-          5. If repeated short blink group = count blinks and send number.
+          Tested pins:
+          PC13, PB2, PB9, PA8, PC14, PC15
           EOF
 
           ls -lah out
 
-      - name: Upload scanner
+      - name: Upload LED test
         uses: actions/upload-artifact@v4
         with:
-          name: STM32F405-LSM6DXX-SCANNER-V4-${{ matrix.led_name }}
+          name: STM32F405-LED-TEST-${{ matrix.led_name }}
           path: out/*
