@@ -1,4 +1,4 @@
-name: Build STM32F405 LSM6DXX BEEPER Scanner V2
+name: Build STM32F405 LSM6DXX I2C BEEPER Scanner
 
 on:
   workflow_dispatch:
@@ -85,7 +85,7 @@ jobs:
             active_low: 0
 
     env:
-      PROJECT: stm32f405_lsm6dxx_beeper_scanner_v2
+      PROJECT: stm32f405_lsm6dxx_i2c_beeper_scanner
 
     steps:
       - name: Install deps
@@ -97,13 +97,13 @@ jobs:
             binutils-arm-none-eabi \
             python3
 
-      - name: Create beeper scanner source
+      - name: Create I2C beeper scanner source
         run: |
           mkdir -p ${PROJECT}
 
           cat > ${PROJECT}/main.c <<'EOF'
           /*
-           * STM32F405 LSM6DXX BEEPER scanner V2
+           * STM32F405 LSM6DXX I2C BEEPER scanner
            *
            * Diagnostic only.
            * Do not fly.
@@ -116,11 +116,11 @@ jobs:
            *   long beep, pause, repeat.
            *
            * Found:
-           *   long beeps  = SPI config number
-           *   short beeps = CS pin number
+           *   long beeps  = I2C config number
+           *   short beeps = address number
            *
            * Example:
-           *   2 long + 6 short = SPI config 2, CS 6
+           *   2 long + 1 short = I2C config 2, address 0x6A
            */
 
           #include <stdint.h>
@@ -134,15 +134,14 @@ jobs:
           #define GPIOB_BASE      0x40020400UL
           #define GPIOC_BASE      0x40020800UL
 
-          #define SPI1_BASE       0x40013000UL
-          #define SPI2_BASE       0x40003800UL
-          #define SPI3_BASE       0x40003C00UL
+          #define I2C1_BASE       0x40005400UL
+          #define I2C2_BASE       0x40005800UL
+          #define I2C3_BASE       0x40005C00UL
 
           #define REG32(addr)     (*(volatile uint32_t *)(addr))
 
           #define RCC_AHB1ENR     REG32(RCC_BASE + 0x30)
           #define RCC_APB1ENR     REG32(RCC_BASE + 0x40)
-          #define RCC_APB2ENR     REG32(RCC_BASE + 0x44)
 
           #define GPIO_MODER(p)   REG32((p) + 0x00)
           #define GPIO_OTYPER(p)  REG32((p) + 0x04)
@@ -152,34 +151,40 @@ jobs:
           #define GPIO_AFRL(p)    REG32((p) + 0x20)
           #define GPIO_AFRH(p)    REG32((p) + 0x24)
 
-          #define SPI_CR1(s)      REG32((s) + 0x00)
-          #define SPI_CR2(s)      REG32((s) + 0x04)
-          #define SPI_SR(s)       REG32((s) + 0x08)
+          #define I2C_CR1(i)      REG32((i) + 0x00)
+          #define I2C_CR2(i)      REG32((i) + 0x04)
+          #define I2C_OAR1(i)     REG32((i) + 0x08)
+          #define I2C_DR(i)       REG32((i) + 0x10)
+          #define I2C_SR1(i)      REG32((i) + 0x14)
+          #define I2C_SR2(i)      REG32((i) + 0x18)
+          #define I2C_CCR(i)      REG32((i) + 0x1C)
+          #define I2C_TRISE(i)    REG32((i) + 0x20)
 
-          #define SPI_SR_RXNE     (1U << 0)
-          #define SPI_SR_TXE      (1U << 1)
+          #define I2C_CR1_PE      (1U << 0)
+          #define I2C_CR1_START   (1U << 8)
+          #define I2C_CR1_STOP    (1U << 9)
+          #define I2C_CR1_ACK     (1U << 10)
+          #define I2C_CR1_SWRST   (1U << 15)
+
+          #define I2C_SR1_SB      (1U << 0)
+          #define I2C_SR1_ADDR    (1U << 1)
+          #define I2C_SR1_BTF     (1U << 2)
+          #define I2C_SR1_RXNE    (1U << 6)
+          #define I2C_SR1_TXE     (1U << 7)
+          #define I2C_SR1_AF      (1U << 10)
 
           #define LSM6DXX_WHOAMI_REG 0x0F
 
           typedef struct {
-              uint32_t port;
-              uint8_t pin;
-          } gpio_pin_t;
-
-          typedef struct {
-              uint32_t spi;
-              uint32_t sck_port;
-              uint8_t sck_pin;
-              uint8_t sck_af;
-              uint32_t miso_port;
-              uint8_t miso_pin;
-              uint8_t miso_af;
-              uint32_t mosi_port;
-              uint8_t mosi_pin;
-              uint8_t mosi_af;
-              uint8_t mode;
+              uint32_t i2c;
+              uint32_t scl_port;
+              uint8_t scl_pin;
+              uint8_t scl_af;
+              uint32_t sda_port;
+              uint8_t sda_pin;
+              uint8_t sda_af;
               uint8_t config_number;
-          } spi_config_t;
+          } i2c_config_t;
 
           static void delay_cycles(volatile uint32_t n)
           {
@@ -217,14 +222,18 @@ jobs:
               GPIO_PUPDR(port) &= ~(3U << (pin * 2));
           }
 
-          static void gpio_af(uint32_t port, uint8_t pin, uint8_t af)
+          static void gpio_af_od_pullup(uint32_t port, uint8_t pin, uint8_t af)
           {
               GPIO_MODER(port) &= ~(3U << (pin * 2));
               GPIO_MODER(port) |=  (2U << (pin * 2));
-              GPIO_OTYPER(port) &= ~(1U << pin);
+
+              GPIO_OTYPER(port) |= (1U << pin); // open-drain
+
               GPIO_OSPEEDR(port) &= ~(3U << (pin * 2));
               GPIO_OSPEEDR(port) |=  (3U << (pin * 2));
+
               GPIO_PUPDR(port) &= ~(3U << (pin * 2));
+              GPIO_PUPDR(port) |=  (1U << (pin * 2)); // pull-up
 
               if (pin < 8) {
                   GPIO_AFRL(port) &= ~(0xFU << (pin * 4));
@@ -302,16 +311,16 @@ jobs:
               }
           }
 
-          static void beep_found(uint8_t spi_config_number, uint8_t cs_number)
+          static void beep_found(uint8_t i2c_config_number, uint8_t addr_number)
           {
               while (1) {
-                  for (uint8_t i = 0; i < spi_config_number; i++) {
+                  for (uint8_t i = 0; i < i2c_config_number; i++) {
                       beep_long();
                   }
 
                   delay_ms(900);
 
-                  for (uint8_t i = 0; i < cs_number; i++) {
+                  for (uint8_t i = 0; i < addr_number; i++) {
                       beep_short();
                   }
 
@@ -319,136 +328,138 @@ jobs:
               }
           }
 
-          static const gpio_pin_t cs_pins[] = {
-              { GPIOA_BASE, 4  },  // CS 1
-              { GPIOA_BASE, 15 },  // CS 2
-              { GPIOB_BASE, 0  },  // CS 3
-              { GPIOB_BASE, 1  },  // CS 4
-              { GPIOB_BASE, 2  },  // CS 5
-              { GPIOB_BASE, 12 },  // CS 6
-              { GPIOC_BASE, 4  },  // CS 7
-              { GPIOC_BASE, 13 },  // CS 8
-              { GPIOC_BASE, 14 },  // CS 9
-              { GPIOC_BASE, 15 },  // CS 10
+          static const i2c_config_t i2c_configs[] = {
+              { I2C1_BASE, GPIOB_BASE, 6, 4, GPIOB_BASE, 7, 4, 1 },  // I2C1 PB6/PB7
+              { I2C1_BASE, GPIOB_BASE, 8, 4, GPIOB_BASE, 9, 4, 2 },  // I2C1 PB8/PB9
+              { I2C2_BASE, GPIOB_BASE, 10, 4, GPIOB_BASE, 11, 4, 3 }, // I2C2 PB10/PB11
+              { I2C3_BASE, GPIOA_BASE, 8, 4, GPIOC_BASE, 9, 4, 4 },  // I2C3 PA8/PC9
           };
 
-          static const spi_config_t spi_configs[] = {
-              // MODE3 configs: CPOL=1 CPHA=1
-              { SPI1_BASE, GPIOA_BASE, 5, 5, GPIOA_BASE, 6, 5, GPIOA_BASE, 7, 5, 3, 1 },
-              { SPI1_BASE, GPIOB_BASE, 3, 5, GPIOB_BASE, 4, 5, GPIOB_BASE, 5, 5, 3, 2 },
-
-              { SPI2_BASE, GPIOB_BASE, 13, 5, GPIOB_BASE, 14, 5, GPIOB_BASE, 15, 5, 3, 3 },
-              { SPI2_BASE, GPIOB_BASE, 10, 5, GPIOB_BASE, 14, 5, GPIOB_BASE, 15, 5, 3, 4 },
-
-              { SPI3_BASE, GPIOC_BASE, 10, 6, GPIOC_BASE, 11, 6, GPIOC_BASE, 12, 6, 3, 5 },
-              { SPI3_BASE, GPIOB_BASE, 3, 6, GPIOB_BASE, 4, 6, GPIOB_BASE, 5, 6, 3, 6 },
-
-              // MODE0 configs: CPOL=0 CPHA=0
-              { SPI1_BASE, GPIOA_BASE, 5, 5, GPIOA_BASE, 6, 5, GPIOA_BASE, 7, 5, 0, 7 },
-              { SPI1_BASE, GPIOB_BASE, 3, 5, GPIOB_BASE, 4, 5, GPIOB_BASE, 5, 5, 0, 8 },
-
-              { SPI2_BASE, GPIOB_BASE, 13, 5, GPIOB_BASE, 14, 5, GPIOB_BASE, 15, 5, 0, 9 },
-              { SPI2_BASE, GPIOB_BASE, 10, 5, GPIOB_BASE, 14, 5, GPIOB_BASE, 15, 5, 0, 10 },
-
-              { SPI3_BASE, GPIOC_BASE, 10, 6, GPIOC_BASE, 11, 6, GPIOC_BASE, 12, 6, 0, 11 },
-              { SPI3_BASE, GPIOB_BASE, 3, 6, GPIOB_BASE, 4, 6, GPIOB_BASE, 5, 6, 0, 12 },
+          static const uint8_t i2c_addrs[] = {
+              0x6A,
+              0x6B,
           };
 
           static void clocks_setup(void)
           {
-              RCC_AHB1ENR |= (1U << 0) | (1U << 1) | (1U << 2);
-              RCC_APB2ENR |= (1U << 12);              // SPI1
-              RCC_APB1ENR |= (1U << 14) | (1U << 15); // SPI2/SPI3
+              RCC_AHB1ENR |= (1U << 0) | (1U << 1) | (1U << 2); // GPIO A/B/C
+              RCC_APB1ENR |= (1U << 21) | (1U << 22) | (1U << 23); // I2C1/2/3
               delay_ms(10);
           }
 
-          static void cs_setup_all(void)
+          static uint8_t wait_flag_set(uint32_t reg_addr, uint32_t mask, uint32_t timeout)
           {
-              for (unsigned i = 0; i < sizeof(cs_pins) / sizeof(cs_pins[0]); i++) {
-                  gpio_output(cs_pins[i].port, cs_pins[i].pin);
-                  gpio_set_pin(cs_pins[i].port, cs_pins[i].pin);
-              }
-          }
-
-          static void cs_low(gpio_pin_t cs)
-          {
-              gpio_clear_pin(cs.port, cs.pin);
-          }
-
-          static void cs_high(gpio_pin_t cs)
-          {
-              gpio_set_pin(cs.port, cs.pin);
-          }
-
-          static void spi_gpio_setup(const spi_config_t *cfg)
-          {
-              gpio_af(cfg->sck_port, cfg->sck_pin, cfg->sck_af);
-              gpio_af(cfg->miso_port, cfg->miso_pin, cfg->miso_af);
-              gpio_af(cfg->mosi_port, cfg->mosi_pin, cfg->mosi_af);
-          }
-
-          static void spi_setup(const spi_config_t *cfg)
-          {
-              uint32_t spi = cfg->spi;
-
-              SPI_CR1(spi) = 0;
-              SPI_CR2(spi) = 0;
-
-              SPI_CR1(spi) =
-                  (1U << 2) |   // Master
-                  (7U << 3) |   // BR /256
-                  (1U << 8) |   // SSI
-                  (1U << 9);    // SSM
-
-              if (cfg->mode == 3) {
-                  SPI_CR1(spi) |= (1U << 1); // CPOL
-                  SPI_CR1(spi) |= (1U << 0); // CPHA
-              }
-
-              SPI_CR1(spi) |= (1U << 6); // SPE
-          }
-
-          static uint8_t spi_xfer8(uint32_t spi, uint8_t data)
-          {
-              uint32_t timeout = 100000;
-
-              while (!(SPI_SR(spi) & SPI_SR_TXE)) {
+              while (!(REG32(reg_addr) & mask)) {
                   if (--timeout == 0) {
-                      return 0xFF;
+                      return 0;
                   }
               }
-
-              *((volatile uint8_t *)(spi + 0x0C)) = data;
-
-              timeout = 100000;
-
-              while (!(SPI_SR(spi) & SPI_SR_RXNE)) {
-                  if (--timeout == 0) {
-                      return 0xFF;
-                  }
-              }
-
-              return *((volatile uint8_t *)(spi + 0x0C));
+              return 1;
           }
 
-          static uint8_t read_whoami(const spi_config_t *cfg, gpio_pin_t cs)
+          static uint8_t wait_flag_clear(uint32_t reg_addr, uint32_t mask, uint32_t timeout)
           {
-              uint8_t value;
+              while (REG32(reg_addr) & mask) {
+                  if (--timeout == 0) {
+                      return 0;
+                  }
+              }
+              return 1;
+          }
 
-              cs_high(cs);
-              delay_ms(1);
-
-              cs_low(cs);
-              delay_ms(1);
-
-              spi_xfer8(cfg->spi, LSM6DXX_WHOAMI_REG | 0x80);
-              value = spi_xfer8(cfg->spi, 0x00);
-
-              delay_ms(1);
-              cs_high(cs);
+          static void i2c_reset(uint32_t i2c)
+          {
+              I2C_CR1(i2c) |= I2C_CR1_SWRST;
               delay_ms(2);
+              I2C_CR1(i2c) &= ~I2C_CR1_SWRST;
+              delay_ms(2);
+          }
 
-              return value;
+          static void i2c_setup(const i2c_config_t *cfg)
+          {
+              gpio_af_od_pullup(cfg->scl_port, cfg->scl_pin, cfg->scl_af);
+              gpio_af_od_pullup(cfg->sda_port, cfg->sda_pin, cfg->sda_af);
+
+              i2c_reset(cfg->i2c);
+
+              I2C_CR1(cfg->i2c) = 0;
+
+              /*
+               * APB1 default is around 16 MHz on HSI in this baremetal setup.
+               * Standard mode 100 kHz.
+               */
+              I2C_CR2(cfg->i2c) = 16;
+              I2C_CCR(cfg->i2c) = 80;
+              I2C_TRISE(cfg->i2c) = 17;
+
+              I2C_CR1(cfg->i2c) |= I2C_CR1_PE;
+              delay_ms(2);
+          }
+
+          static uint8_t i2c_read_reg(uint32_t i2c, uint8_t addr, uint8_t reg, uint8_t *out)
+          {
+              volatile uint32_t tmp;
+
+              I2C_SR1(i2c) &= ~I2C_SR1_AF;
+
+              I2C_CR1(i2c) |= I2C_CR1_START;
+              if (!wait_flag_set(i2c + 0x14, I2C_SR1_SB, 100000)) {
+                  I2C_CR1(i2c) |= I2C_CR1_STOP;
+                  return 0;
+              }
+
+              I2C_DR(i2c) = (addr << 1) | 0;
+              if (!wait_flag_set(i2c + 0x14, I2C_SR1_ADDR | I2C_SR1_AF, 100000)) {
+                  I2C_CR1(i2c) |= I2C_CR1_STOP;
+                  return 0;
+              }
+
+              if (I2C_SR1(i2c) & I2C_SR1_AF) {
+                  I2C_SR1(i2c) &= ~I2C_SR1_AF;
+                  I2C_CR1(i2c) |= I2C_CR1_STOP;
+                  return 0;
+              }
+
+              tmp = I2C_SR2(i2c);
+              (void)tmp;
+
+              I2C_DR(i2c) = reg;
+              if (!wait_flag_set(i2c + 0x14, I2C_SR1_TXE, 100000)) {
+                  I2C_CR1(i2c) |= I2C_CR1_STOP;
+                  return 0;
+              }
+
+              I2C_CR1(i2c) |= I2C_CR1_START;
+              if (!wait_flag_set(i2c + 0x14, I2C_SR1_SB, 100000)) {
+                  I2C_CR1(i2c) |= I2C_CR1_STOP;
+                  return 0;
+              }
+
+              I2C_DR(i2c) = (addr << 1) | 1;
+              if (!wait_flag_set(i2c + 0x14, I2C_SR1_ADDR | I2C_SR1_AF, 100000)) {
+                  I2C_CR1(i2c) |= I2C_CR1_STOP;
+                  return 0;
+              }
+
+              if (I2C_SR1(i2c) & I2C_SR1_AF) {
+                  I2C_SR1(i2c) &= ~I2C_SR1_AF;
+                  I2C_CR1(i2c) |= I2C_CR1_STOP;
+                  return 0;
+              }
+
+              I2C_CR1(i2c) &= ~I2C_CR1_ACK;
+
+              tmp = I2C_SR2(i2c);
+              (void)tmp;
+
+              I2C_CR1(i2c) |= I2C_CR1_STOP;
+
+              if (!wait_flag_set(i2c + 0x14, I2C_SR1_RXNE, 100000)) {
+                  return 0;
+              }
+
+              *out = (uint8_t)I2C_DR(i2c);
+              return 1;
           }
 
           static uint8_t is_lsm6dxx_id(uint8_t id)
@@ -467,31 +478,29 @@ jobs:
               beeper_setup();
               startup_beep();
 
-              cs_setup_all();
               delay_ms(1000);
 
-              for (unsigned s = 0; s < sizeof(spi_configs) / sizeof(spi_configs[0]); s++) {
-                  const spi_config_t *cfg = &spi_configs[s];
+              for (unsigned i = 0; i < sizeof(i2c_configs) / sizeof(i2c_configs[0]); i++) {
+                  const i2c_config_t *cfg = &i2c_configs[i];
 
-                  spi_gpio_setup(cfg);
-                  spi_setup(cfg);
+                  i2c_setup(cfg);
 
-                  for (unsigned c = 0; c < sizeof(cs_pins) / sizeof(cs_pins[0]); c++) {
-                      gpio_pin_t cs = cs_pins[c];
-                      uint8_t cs_number = c + 1;
+                  for (unsigned a = 0; a < sizeof(i2c_addrs) / sizeof(i2c_addrs[0]); a++) {
+                      uint8_t id = 0xFF;
 
-                      for (uint8_t attempt = 0; attempt < 12; attempt++) {
-                          uint8_t id = read_whoami(cfg, cs);
-
-                          if (is_lsm6dxx_id(id)) {
-                              beep_found(cfg->config_number, cs_number);
+                      for (uint8_t attempt = 0; attempt < 10; attempt++) {
+                          if (i2c_read_reg(cfg->i2c, i2c_addrs[a], LSM6DXX_WHOAMI_REG, &id)) {
+                              if (is_lsm6dxx_id(id)) {
+                                  beep_found(cfg->config_number, a + 1);
+                              }
                           }
 
-                          delay_ms(20);
+                          delay_ms(30);
                       }
                   }
 
-                  SPI_CR1(cfg->spi) &= ~(1U << 6);
+                  I2C_CR1(cfg->i2c) &= ~I2C_CR1_PE;
+                  delay_ms(10);
               }
 
               beep_not_found();
@@ -607,7 +616,7 @@ jobs:
           EOF
 
           cat > ${PROJECT}/Makefile <<'EOF'
-          PROJECT = beeper_scanner_v2
+          PROJECT = i2c_beeper_scanner
           BUILD_DIR = build
 
           PREFIX ?= arm-none-eabi
@@ -648,7 +657,7 @@ jobs:
           	rm -rf $(BUILD_DIR)
           EOF
 
-      - name: Build beeper scanner
+      - name: Build I2C beeper scanner
         run: |
           cd ${PROJECT}
           make clean
@@ -658,12 +667,12 @@ jobs:
         run: |
           mkdir -p out
 
-          cp ${PROJECT}/build/beeper_scanner_v2.bin out/STM32F405_LSM6DXX_BEEPER_SCANNER_V2_${{ matrix.beeper_name }}.bin
-          cp ${PROJECT}/build/beeper_scanner_v2.hex out/STM32F405_LSM6DXX_BEEPER_SCANNER_V2_${{ matrix.beeper_name }}.hex
-          cp ${PROJECT}/build/beeper_scanner_v2.elf out/STM32F405_LSM6DXX_BEEPER_SCANNER_V2_${{ matrix.beeper_name }}.elf
+          cp ${PROJECT}/build/i2c_beeper_scanner.bin out/STM32F405_LSM6DXX_I2C_BEEPER_SCANNER_${{ matrix.beeper_name }}.bin
+          cp ${PROJECT}/build/i2c_beeper_scanner.hex out/STM32F405_LSM6DXX_I2C_BEEPER_SCANNER_${{ matrix.beeper_name }}.hex
+          cp ${PROJECT}/build/i2c_beeper_scanner.elf out/STM32F405_LSM6DXX_I2C_BEEPER_SCANNER_${{ matrix.beeper_name }}.elf
 
           cat > out/README_${{ matrix.beeper_name }}.txt <<'EOF'
-          STM32F405 LSM6DXX BEEPER SCANNER V2
+          STM32F405 LSM6DXX I2C BEEPER SCANNER
 
           Diagnostic only.
           Do not fly.
@@ -676,45 +685,28 @@ jobs:
           - long beep, pause, repeat.
 
           Found:
-          - long beeps  = SPI config number
-          - short beeps = CS pin number
+          - long beeps  = I2C config number
+          - short beeps = address number
+
+          I2C config:
+          1 = I2C1 PB6/PB7
+          2 = I2C1 PB8/PB9
+          3 = I2C2 PB10/PB11
+          4 = I2C3 PA8/PC9
+
+          Address:
+          1 short = 0x6A
+          2 short = 0x6B
 
           Example:
-          - 2 long beeps + 6 short beeps
-          - means SPI config 2, CS 6
-
-          SPI config numbers:
-          1  = SPI1 PA5/PA6/PA7 MODE3
-          2  = SPI1 PB3/PB4/PB5 MODE3
-          3  = SPI2 PB13/PB14/PB15 MODE3
-          4  = SPI2 PB10/PB14/PB15 MODE3
-          5  = SPI3 PC10/PC11/PC12 MODE3
-          6  = SPI3 PB3/PB4/PB5 MODE3
-
-          7  = SPI1 PA5/PA6/PA7 MODE0
-          8  = SPI1 PB3/PB4/PB5 MODE0
-          9  = SPI2 PB13/PB14/PB15 MODE0
-          10 = SPI2 PB10/PB14/PB15 MODE0
-          11 = SPI3 PC10/PC11/PC12 MODE0
-          12 = SPI3 PB3/PB4/PB5 MODE0
-
-          CS numbers:
-          1  = PA4
-          2  = PA15
-          3  = PB0
-          4  = PB1
-          5  = PB2
-          6  = PB12
-          7  = PC4
-          8  = PC13
-          9  = PC14
-          10 = PC15
+          2 long + 1 short = I2C1 PB8/PB9, address 0x6A
           EOF
 
           ls -lah out
 
-      - name: Upload beeper scanner
+      - name: Upload I2C beeper scanner
         uses: actions/upload-artifact@v4
         with:
-          name: STM32F405-LSM6DXX-BEEPER-SCANNER-V2-${{ matrix.beeper_name }}
+          name: STM32F405-LSM6DXX-I2C-BEEPER-SCANNER-${{ matrix.beeper_name }}
           path: out/*
+          
