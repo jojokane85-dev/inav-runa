@@ -1,4 +1,4 @@
-name: Build STM32F405 LSM6DXX Baremetal Scanner V3
+name: Build STM32F405 LSM6DXX Baremetal Scanner V4
 
 on:
   workflow_dispatch:
@@ -49,7 +49,7 @@ jobs:
             active_low: 0
 
     env:
-      PROJECT: stm32f405_lsm6dxx_scanner_v3
+      PROJECT: stm32f405_lsm6dxx_scanner_v4
 
     steps:
       - name: Install deps
@@ -67,12 +67,16 @@ jobs:
 
           cat > ${PROJECT}/main.c <<'EOF'
           /*
-           * STM32F405 LSM6DXX baremetal scanner V3
+           * STM32F405 LSM6DXX baremetal scanner V4
            *
-           * No libopencm3.
-           * No external linker script.
            * Diagnostic firmware only.
            * Do not fly.
+           * Do not install propeller.
+           *
+           * V4:
+           * - startup blink test
+           * - SPI timeouts
+           * - no external libraries
            */
 
           #include <stdint.h>
@@ -80,11 +84,6 @@ jobs:
           #define LED_PORT_LETTER '${{ matrix.led_port }}'
           #define LED_PIN_NUM     ${{ matrix.led_pin }}
           #define LED_ACTIVE_LOW  ${{ matrix.active_low }}
-
-          #define PERIPH_BASE     0x40000000UL
-          #define AHB1PERIPH_BASE 0x40020000UL
-          #define APB1PERIPH_BASE 0x40000000UL
-          #define APB2PERIPH_BASE 0x40010000UL
 
           #define RCC_BASE        0x40023800UL
           #define GPIOA_BASE      0x40020000UL
@@ -96,10 +95,7 @@ jobs:
           #define SPI3_BASE       0x40003C00UL
 
           #define REG32(addr)     (*(volatile uint32_t *)(addr))
-          #define REG16(addr)     (*(volatile uint16_t *)(addr))
-          #define REG8(addr)      (*(volatile uint8_t  *)(addr))
 
-          #define RCC_CR          REG32(RCC_BASE + 0x00)
           #define RCC_AHB1ENR     REG32(RCC_BASE + 0x30)
           #define RCC_APB1ENR     REG32(RCC_BASE + 0x40)
           #define RCC_APB2ENR     REG32(RCC_BASE + 0x44)
@@ -108,8 +104,6 @@ jobs:
           #define GPIO_OTYPER(p)  REG32((p) + 0x04)
           #define GPIO_OSPEEDR(p) REG32((p) + 0x08)
           #define GPIO_PUPDR(p)   REG32((p) + 0x0C)
-          #define GPIO_IDR(p)     REG32((p) + 0x10)
-          #define GPIO_ODR(p)     REG32((p) + 0x14)
           #define GPIO_BSRR(p)    REG32((p) + 0x18)
           #define GPIO_AFRL(p)    REG32((p) + 0x20)
           #define GPIO_AFRH(p)    REG32((p) + 0x24)
@@ -117,7 +111,6 @@ jobs:
           #define SPI_CR1(s)      REG32((s) + 0x00)
           #define SPI_CR2(s)      REG32((s) + 0x04)
           #define SPI_SR(s)       REG32((s) + 0x08)
-          #define SPI_DR(s)       REG32((s) + 0x0C)
 
           #define SPI_SR_RXNE     (1U << 0)
           #define SPI_SR_TXE      (1U << 1)
@@ -144,10 +137,6 @@ jobs:
 
           static void delay_ms(uint32_t ms)
           {
-              /*
-               * Approx delay on HSI 16MHz.
-               * Not exact, but enough for blinking and SPI pauses.
-               */
               while (ms--) {
                   delay_cycles(4000);
               }
@@ -164,12 +153,9 @@ jobs:
           {
               GPIO_MODER(port) &= ~(3U << (pin * 2));
               GPIO_MODER(port) |=  (1U << (pin * 2));
-
               GPIO_OTYPER(port) &= ~(1U << pin);
-
               GPIO_OSPEEDR(port) &= ~(3U << (pin * 2));
               GPIO_OSPEEDR(port) |=  (2U << (pin * 2));
-
               GPIO_PUPDR(port) &= ~(3U << (pin * 2));
           }
 
@@ -249,6 +235,14 @@ jobs:
               delay_ms(600);
           }
 
+          static void startup_blink(void)
+          {
+              for (uint8_t i = 0; i < 5; i++) {
+                  blink_short();
+              }
+              delay_ms(1000);
+          }
+
           static void blink_code(uint8_t code)
           {
               if (code == 0) {
@@ -287,14 +281,9 @@ jobs:
 
           static void clocks_setup(void)
           {
-              /*
-               * Use default HSI 16MHz.
-               * Enable GPIOA/B/C and SPI1/2/3 clocks.
-               */
               RCC_AHB1ENR |= (1U << 0) | (1U << 1) | (1U << 2);
-              RCC_APB2ENR |= (1U << 12); // SPI1
-              RCC_APB1ENR |= (1U << 14) | (1U << 15); // SPI2/SPI3
-
+              RCC_APB2ENR |= (1U << 12);
+              RCC_APB1ENR |= (1U << 14) | (1U << 15);
               delay_ms(10);
           }
 
@@ -319,17 +308,14 @@ jobs:
           static void spi_gpio_setup(uint32_t spi)
           {
               if (spi == SPI1_BASE) {
-                  // SPI1 AF5: PA5 SCK, PA6 MISO, PA7 MOSI
                   gpio_af(GPIOA_BASE, 5, 5);
                   gpio_af(GPIOA_BASE, 6, 5);
                   gpio_af(GPIOA_BASE, 7, 5);
               } else if (spi == SPI2_BASE) {
-                  // SPI2 AF5: PB13 SCK, PB14 MISO, PB15 MOSI
                   gpio_af(GPIOB_BASE, 13, 5);
                   gpio_af(GPIOB_BASE, 14, 5);
                   gpio_af(GPIOB_BASE, 15, 5);
               } else if (spi == SPI3_BASE) {
-                  // SPI3 AF6: PC10 SCK, PC11 MISO, PC12 MOSI
                   gpio_af(GPIOC_BASE, 10, 6);
                   gpio_af(GPIOC_BASE, 11, 6);
                   gpio_af(GPIOC_BASE, 12, 6);
@@ -341,13 +327,9 @@ jobs:
               SPI_CR1(spi) = 0;
               SPI_CR2(spi) = 0;
 
-              /*
-               * Master, software NSS, NSS high, slow baud,
-               * CPOL=1, CPHA=1 for many ST IMUs.
-               */
               SPI_CR1(spi) =
                   (1U << 2) |   // MSTR
-                  (7U << 3) |   // BR = fPCLK/256
+                  (7U << 3) |   // BR /256
                   (1U << 8) |   // SSI
                   (1U << 9) |   // SSM
                   (1U << 1) |   // CPOL
@@ -358,10 +340,24 @@ jobs:
 
           static uint8_t spi_xfer8(uint32_t spi, uint8_t data)
           {
-              while (!(SPI_SR(spi) & SPI_SR_TXE)) {}
+              uint32_t timeout = 100000;
+
+              while (!(SPI_SR(spi) & SPI_SR_TXE)) {
+                  if (--timeout == 0) {
+                      return 0xFF;
+                  }
+              }
+
               *((volatile uint8_t *)(spi + 0x0C)) = data;
 
-              while (!(SPI_SR(spi) & SPI_SR_RXNE)) {}
+              timeout = 100000;
+
+              while (!(SPI_SR(spi) & SPI_SR_RXNE)) {
+                  if (--timeout == 0) {
+                      return 0xFF;
+                  }
+              }
+
               return *((volatile uint8_t *)(spi + 0x0C));
           }
 
@@ -399,6 +395,8 @@ jobs:
               clocks_setup();
               led_setup();
               led_off();
+
+              startup_blink();
 
               cs_setup_all();
 
@@ -595,41 +593,40 @@ jobs:
         run: |
           mkdir -p out
 
-          cp ${PROJECT}/build/scanner.bin out/STM32F405_LSM6DXX_SCANNER_V3_${{ matrix.led_name }}.bin
-          cp ${PROJECT}/build/scanner.hex out/STM32F405_LSM6DXX_SCANNER_V3_${{ matrix.led_name }}.hex
-          cp ${PROJECT}/build/scanner.elf out/STM32F405_LSM6DXX_SCANNER_V3_${{ matrix.led_name }}.elf
+          cp ${PROJECT}/build/scanner.bin out/STM32F405_LSM6DXX_SCANNER_V4_${{ matrix.led_name }}.bin
+          cp ${PROJECT}/build/scanner.hex out/STM32F405_LSM6DXX_SCANNER_V4_${{ matrix.led_name }}.hex
+          cp ${PROJECT}/build/scanner.elf out/STM32F405_LSM6DXX_SCANNER_V4_${{ matrix.led_name }}.elf
 
           cat > out/README_${{ matrix.led_name }}.txt <<'EOF'
-          STM32F405 LSM6DXX BAREMETAL SCANNER V3
+          STM32F405 LSM6DXX BAREMETAL SCANNER V4
 
           Diagnostic firmware only.
           Do not fly.
           Do not install propeller.
 
-          LED variant:
-          ${{ matrix.led_name }}
+          First:
+          - Scanner should blink 5 quick times after boot.
+          - This means firmware started.
 
-          What it scans:
-          - SPI1:
-            SCK PA5, MISO PA6, MOSI PA7
-          - SPI2:
-            SCK PB13, MISO PB14, MOSI PB15
-          - SPI3:
-            SCK PC10, MISO PC11, MOSI PC12
+          Then:
+          - Sensor found:
+            LED blinks variant number repeatedly.
+          - Sensor not found:
+            LED slow-blinks forever.
+
+          Scanned SPI:
+          - SPI1: PA5 SCK, PA6 MISO, PA7 MOSI
+          - SPI2: PB13 SCK, PB14 MISO, PB15 MOSI
+          - SPI3: PC10 SCK, PC11 MISO, PC12 MOSI
 
           CS pins:
           PA4, PA15, PB0, PB1, PB2, PB12, PC4, PC13, PC14, PC15
 
           WHO_AM_I:
-          - register 0x0F
-          - accepted IDs:
-            0x69, 0x6A, 0x6B, 0x6C, 0x6D
+          register 0x0F
 
-          Result:
-          - Sensor found:
-            LED blinks variant number repeatedly.
-          - Not found:
-            LED slow-blinks forever.
+          Accepted IDs:
+          0x69, 0x6A, 0x6B, 0x6C, 0x6D
 
           Variant mapping:
            1  = SPI1 PA4
@@ -669,11 +666,8 @@ jobs:
           1. Put board in DFU mode.
           2. Flash HEX.
           3. Watch LED.
-          4. Count short blinks between pauses.
-          5. Send blink number to ChatGPT.
-
-          If no LED blinks:
-          Try another LED variant.
+          4. If 5 quick blinks then slow blink = scanner works, sensor not found.
+          5. If repeated short blink group = count blinks and send number.
           EOF
 
           ls -lah out
@@ -681,5 +675,5 @@ jobs:
       - name: Upload scanner
         uses: actions/upload-artifact@v4
         with:
-          name: STM32F405-LSM6DXX-SCANNER-V3-${{ matrix.led_name }}
+          name: STM32F405-LSM6DXX-SCANNER-V4-${{ matrix.led_name }}
           path: out/*
