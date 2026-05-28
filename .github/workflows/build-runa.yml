@@ -1,4 +1,4 @@
-name: Build STM32F405 LSM6DXX Low Level Scanner
+name: Build STM32F405 LSM6DXX Low Level Scanner V2
 
 on:
   workflow_dispatch:
@@ -12,7 +12,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # LED variants
           - led_name: LED_PC13
             led_port: GPIOC
             led_pin: GPIO13
@@ -56,19 +55,22 @@ jobs:
 
           cat > ${PROJECT}/main.c <<'EOF'
           /*
-           * STM32F405 LSM6DXX low-level SPI scanner
+           * STM32F405 LSM6DXX low-level SPI scanner V2
            *
            * Diagnostic firmware only.
            * Do not fly.
+           * Do not install propeller.
            *
-           * It scans SPI1/SPI2/SPI3 with multiple CS pins and reads
-           * LSM6DXX WHO_AM_I register 0x0F.
+           * It scans:
+           * - SPI1 / SPI2 / SPI3
+           * - CS pins: PA4, PA15, PB0, PB1, PB2, PB12, PC4, PC13, PC14, PC15
+           * - LSM6DXX WHO_AM_I register 0x0F
            *
            * Success:
-           *   LED blinks variant number repeatedly.
+           * - LED blinks variant number.
            *
            * Failure:
-           *   LED slow blinking forever.
+           * - LED blinks slowly forever.
            */
 
           #include <libopencm3/stm32/rcc.h>
@@ -183,16 +185,16 @@ jobs:
           };
 
           static const gpio_pin_t cs_pins[] = {
-              { GPIOA, GPIO4  },   // PA4
-              { GPIOA, GPIO15 },   // PA15
-              { GPIOB, GPIO0  },   // PB0
-              { GPIOB, GPIO1  },   // PB1
-              { GPIOB, GPIO2  },   // PB2
-              { GPIOB, GPIO12 },   // PB12
-              { GPIOC, GPIO4  },   // PC4
-              { GPIOC, GPIO13 },   // PC13
-              { GPIOC, GPIO14 },   // PC14
-              { GPIOC, GPIO15 },   // PC15
+              { GPIOA, GPIO4  },   // 1 / 11 / 21
+              { GPIOA, GPIO15 },   // 2 / 12 / 22
+              { GPIOB, GPIO0  },   // 3 / 13 / 23
+              { GPIOB, GPIO1  },   // 4 / 14 / 24
+              { GPIOB, GPIO2  },   // 5 / 15 / 25
+              { GPIOB, GPIO12 },   // 6 / 16 / 26
+              { GPIOC, GPIO4  },   // 7 / 17 / 27
+              { GPIOC, GPIO13 },   // 8 / 18 / 28
+              { GPIOC, GPIO14 },   // 9 / 19 / 29
+              { GPIOC, GPIO15 },   // 10 / 20 / 30
           };
 
           static void cs_setup_all(void)
@@ -216,34 +218,33 @@ jobs:
 
           static void spi_gpio_setup(uint32_t spi)
           {
-              /*
-               * STM32F405 common SPI pins:
-               *
-               * SPI1:
-               *   SCK  PA5
-               *   MISO PA6
-               *   MOSI PA7
-               *
-               * SPI2:
-               *   SCK  PB13
-               *   MISO PB14
-               *   MOSI PB15
-               *
-               * SPI3:
-               *   SCK  PC10
-               *   MISO PC11
-               *   MOSI PC12
-               */
-
               if (spi == SPI1) {
+                  /*
+                   * SPI1:
+                   * SCK  PA5
+                   * MISO PA6
+                   * MOSI PA7
+                   */
                   gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO5 | GPIO6 | GPIO7);
                   gpio_set_af(GPIOA, GPIO_AF5, GPIO5 | GPIO6 | GPIO7);
                   gpio_set_output_options(GPIOA, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO5 | GPIO6 | GPIO7);
               } else if (spi == SPI2) {
+                  /*
+                   * SPI2:
+                   * SCK  PB13
+                   * MISO PB14
+                   * MOSI PB15
+                   */
                   gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO13 | GPIO14 | GPIO15);
                   gpio_set_af(GPIOB, GPIO_AF5, GPIO13 | GPIO14 | GPIO15);
                   gpio_set_output_options(GPIOB, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO13 | GPIO14 | GPIO15);
               } else if (spi == SPI3) {
+                  /*
+                   * SPI3:
+                   * SCK  PC10
+                   * MISO PC11
+                   * MOSI PC12
+                   */
                   gpio_mode_setup(GPIOC, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO10 | GPIO11 | GPIO12);
                   gpio_set_af(GPIOC, GPIO_AF6, GPIO10 | GPIO11 | GPIO12);
                   gpio_set_output_options(GPIOC, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO10 | GPIO11 | GPIO12);
@@ -253,7 +254,6 @@ jobs:
           static void spi_setup(uint32_t spi)
           {
               spi_disable(spi);
-              spi_reset(spi);
 
               spi_init_master(
                   spi,
@@ -272,8 +272,7 @@ jobs:
 
           static uint8_t spi_xfer8(uint32_t spi, uint8_t data)
           {
-              spi_send(spi, data);
-              return spi_read(spi);
+              return spi_xfer(spi, data);
           }
 
           static uint8_t read_whoami(uint32_t spi, gpio_pin_t cs)
@@ -285,7 +284,7 @@ jobs:
 
               /*
                * LSM6DXX SPI read:
-               * bit7 = 1 for read
+               * register address | 0x80
                */
               spi_xfer8(spi, LSM6DXX_WHOAMI_REG | 0x80);
               value = spi_xfer8(spi, 0x00);
@@ -325,36 +324,14 @@ jobs:
                   for (unsigned c = 0; c < sizeof(cs_pins) / sizeof(cs_pins[0]); c++) {
                       gpio_pin_t cs = cs_pins[c];
 
-                      /*
-                       * Do several reads because sensors may need time after boot.
-                       */
-                      for (uint8_t attempt = 0; attempt < 5; attempt++) {
+                      for (uint8_t attempt = 0; attempt < 8; attempt++) {
                           uint8_t id = read_whoami(spi, cs);
 
                           if (is_lsm6dxx_id(id)) {
-                              /*
-                               * Found.
-                               * Blink variant code forever.
-                               *
-                               * Variant mapping:
-                               *  1  = SPI1 PA4
-                               *  2  = SPI1 PA15
-                               *  3  = SPI1 PB0
-                               *  4  = SPI1 PB1
-                               *  5  = SPI1 PB2
-                               *  6  = SPI1 PB12
-                               *  7  = SPI1 PC4
-                               *  8  = SPI1 PC13
-                               *  9  = SPI1 PC14
-                               *  10 = SPI1 PC15
-                               *  11 = SPI2 PA4
-                               *  ...
-                               *  21 = SPI3 PA4
-                               */
                               blink_code(variant);
                           }
 
-                          delay_ms(20);
+                          delay_ms(25);
                       }
 
                       variant++;
@@ -363,9 +340,6 @@ jobs:
                   spi_disable(spi);
               }
 
-              /*
-               * Not found.
-               */
               blink_code(0);
 
               return 0;
@@ -378,10 +352,8 @@ jobs:
 
           CFILES = main.c
 
-          DEVICE = stm32f405rg
           OPENCM3_DIR = ../libopencm3
-
-          LDSCRIPT = $(OPENCM3_DIR)/lib/stm32/f4/stm32f405x6.ld
+          LDSCRIPT = $(OPENCM3_DIR)/lib/stm32/f4/stm32f405xg.ld
 
           PREFIX ?= arm-none-eabi
 
@@ -437,12 +409,12 @@ jobs:
         run: |
           mkdir -p out
 
-          cp ${PROJECT}/build/scanner.bin out/STM32F405_LSM6DXX_SCANNER_${{ matrix.led_name }}.bin
-          cp ${PROJECT}/build/scanner.hex out/STM32F405_LSM6DXX_SCANNER_${{ matrix.led_name }}.hex
-          cp ${PROJECT}/build/scanner.elf out/STM32F405_LSM6DXX_SCANNER_${{ matrix.led_name }}.elf
+          cp ${PROJECT}/build/scanner.bin out/STM32F405_LSM6DXX_SCANNER_V2_${{ matrix.led_name }}.bin
+          cp ${PROJECT}/build/scanner.hex out/STM32F405_LSM6DXX_SCANNER_V2_${{ matrix.led_name }}.hex
+          cp ${PROJECT}/build/scanner.elf out/STM32F405_LSM6DXX_SCANNER_V2_${{ matrix.led_name }}.elf
 
           cat > out/README_${{ matrix.led_name }}.txt <<'EOF'
-          STM32F405 LSM6DXX LOW LEVEL SCANNER
+          STM32F405 LSM6DXX LOW LEVEL SCANNER V2
 
           Diagnostic firmware only.
           Do not fly.
@@ -517,5 +489,5 @@ jobs:
       - name: Upload scanner
         uses: actions/upload-artifact@v4
         with:
-          name: STM32F405-LSM6DXX-SCANNER-${{ matrix.led_name }}
+          name: STM32F405-LSM6DXX-SCANNER-V2-${{ matrix.led_name }}
           path: out/*
