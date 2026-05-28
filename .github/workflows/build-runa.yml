@@ -1,4 +1,4 @@
-name: Build RUNA FC45 TRUE 8.0.1 V4
+name: Build RUNA FC45 TRUE 8.0.1 V5
 
 on:
   workflow_dispatch:
@@ -214,7 +214,7 @@ jobs:
           add = f"""
 
           /*
-           * RUNA FC4.5 TRUE 8.0.1 V4
+           * RUNA FC4.5 TRUE 8.0.1 V5
            *
            * Working FC data:
            * GYRO/ACC: LSM6DXX
@@ -319,6 +319,138 @@ jobs:
                   "SDCARD_SPI_CS_PIN",
               ]):
                   print(line)
+          PY
+
+      - name: Patch target.c manual LSM6DXX bus registration
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          target = os.environ["TARGET"]
+          path = Path(f"src/main/target/{target}/target.c")
+
+          if path.exists():
+              text = path.read_text(encoding="utf-8", errors="ignore")
+          else:
+              text = ""
+
+          if '#include "platform.h"' not in text:
+              text = '#include "platform.h"\n' + text
+
+          if '#include "target.h"' not in text:
+              text = '#include "target.h"\n' + text
+
+          if '#include "drivers/bus.h"' not in text:
+              text = '#include "drivers/bus.h"\n' + text
+
+          if '#include "drivers/bus_spi.h"' not in text:
+              text = '#include "drivers/bus_spi.h"\n' + text
+
+          # Remove copied IMU bus registrations from SPEEDYBEEF405WING target.c
+          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*mpu.*\n', '', text, flags=re.M | re.I)
+          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*icm.*\n', '', text, flags=re.M | re.I)
+          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*bmi.*\n', '', text, flags=re.M | re.I)
+          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*lsm.*\n', '', text, flags=re.M | re.I)
+
+          # Find correct DEVHW enum name in INAV 8.0.1
+          search_files = [
+              Path("src/main/target/common_hardware.c"),
+              Path("src/main/target/common_hardware.h"),
+              Path("src/main/drivers/bus.h"),
+              Path("src/main/drivers/bus_spi.h"),
+              Path("src/main/drivers/bus_device.h"),
+          ]
+
+          all_src = ""
+
+          for p in search_files:
+              if p.exists():
+                  all_src += p.read_text(encoding="utf-8", errors="ignore") + "\n"
+
+          if "DEVHW_LSM6DXX" in all_src:
+              devhw = "DEVHW_LSM6DXX"
+          elif "DEVHW_LSM6D" in all_src:
+              devhw = "DEVHW_LSM6D"
+          else:
+              devhw = "DEVHW_LSM6D"
+
+          text += "\n"
+          text += "/* RUNA FC4.5 TRUE 8.0.1 V5 manual IMU registration */\n"
+          text += f"BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, {devhw}, LSM6DXX_SPI_BUS, LSM6DXX_CS_PIN, NONE, 0, DEVFLAGS_NONE, IMU_LSM6DXX_ALIGN);\n"
+
+          path.write_text(text, encoding="utf-8")
+
+          print("Selected DEVHW:", devhw)
+          print("===== target.c patched =====")
+          print(text)
+          PY
+
+      - name: Patch common_hardware duplicate LSM6DXX safety
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/target/common_hardware.c")
+
+          if not path.exists():
+              print("common_hardware.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8", errors="ignore")
+          marker = "RUNA_DISABLE_COMMON_LSM6DXX_REG"
+
+          if marker not in text:
+              lines = []
+
+              for line in text.splitlines():
+                  low = line.lower()
+
+                  if "busdev" in low and "lsm" in low and "busdev_register_spi" in low:
+                      lines.append("/* " + marker + " " + line + " */")
+                  else:
+                      lines.append(line)
+
+              text = "\n".join(lines) + "\n"
+              path.write_text(text, encoding="utf-8")
+              print("common_hardware LSM6DXX registration disabled if present")
+          else:
+              print("common_hardware LSM6DXX already disabled")
+          PY
+
+      - name: Patch LSM6DXX gyroAlign fix safe
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
+
+          if not path.exists():
+              print("accgyro_lsm6dxx.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8", errors="ignore")
+          fix = "gyro->gyroAlign = gyro->busDev->param;"
+
+          if fix in text:
+              print("LSM6DXX gyroAlign fix already present")
+          else:
+              old = "gyro->intStatusFn = gyroCheckDataReady;"
+              new = "gyro->intStatusFn = gyroCheckDataReady;\n    gyro->gyroAlign = gyro->busDev->param;"
+
+              if old in text:
+                  text = text.replace(old, new, 1)
+                  path.write_text(text, encoding="utf-8")
+                  print("LSM6DXX gyroAlign fix added")
+              else:
+                  print("Pattern not found, no gyroAlign patch applied")
           PY
 
       - name: Patch RUNA name in MSP
@@ -440,7 +572,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="out/RUNA_FC45_TRUE_8_0_1_V4_${{ matrix.name }}_${base}"
+            dst="out/RUNA_FC45_TRUE_8_0_1_V5_${{ matrix.name }}_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -452,10 +584,10 @@ jobs:
             exit 1
           fi
 
-          cat > out/RUNA_FC45_TRUE_8_0_1_V4_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
+          cat > out/RUNA_FC45_TRUE_8_0_1_V5_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
           batch start
 
-          # RUNA FC4.5 TRUE 8.0.1 V4
+          # RUNA FC4.5 TRUE 8.0.1 V5
           # Variant: ${{ matrix.name }}
           # IMU align: ${{ matrix.imu_align }}
 
@@ -545,8 +677,8 @@ jobs:
           save
           EOF
 
-          cat > out/README_RUNA_FC45_TRUE_8_0_1_V4_${{ matrix.name }}.txt <<'EOF'
-          RUNA FC45 TRUE 8.0.1 V4
+          cat > out/README_RUNA_FC45_TRUE_8_0_1_V5_${{ matrix.name }}.txt <<'EOF'
+          RUNA FC45 TRUE 8.0.1 V5
 
           Uses working FC4.5 data:
           - INAV 8.0.1
@@ -559,10 +691,10 @@ jobs:
           - BEEPER: PC15
           - LED: PA14 / PA13
 
-          V4 changes:
-          - removed FLIP align variants
-          - removed target.c manual bus registration
-          - uses normal INAV common_hardware registration
+          V5 changes:
+          - same as V4 hardware pins
+          - manual target.c LSM6DXX SPI registration restored
+          - no FLIP align variants
           - no fake LSM6DXX detect
 
           Flash:
@@ -601,5 +733,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-TRUE-8-0-1-V4-${{ matrix.name }}
+          name: RUNA-FC45-TRUE-8-0-1-V5-${{ matrix.name }}
           path: out/*
