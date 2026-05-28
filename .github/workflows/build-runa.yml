@@ -1,4 +1,4 @@
-name: Build STM32F405 LSM6DXX I2C BEEPER Scanner
+name: Build RUNA FC45 SPIN FIX V2
 
 on:
   workflow_dispatch:
@@ -12,701 +12,573 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - beeper_name: BEEPER_PA0_LOW
-            beeper_port: A
-            beeper_pin: 0
-            active_low: 1
-          - beeper_name: BEEPER_PA0_HIGH
-            beeper_port: A
-            beeper_pin: 0
-            active_low: 0
-
-          - beeper_name: BEEPER_PA1_LOW
-            beeper_port: A
-            beeper_pin: 1
-            active_low: 1
-          - beeper_name: BEEPER_PA1_HIGH
-            beeper_port: A
-            beeper_pin: 1
-            active_low: 0
-
-          - beeper_name: BEEPER_PA8_LOW
-            beeper_port: A
-            beeper_pin: 8
-            active_low: 1
-          - beeper_name: BEEPER_PA8_HIGH
-            beeper_port: A
-            beeper_pin: 8
-            active_low: 0
-
-          - beeper_name: BEEPER_PB2_LOW
-            beeper_port: B
-            beeper_pin: 2
-            active_low: 1
-          - beeper_name: BEEPER_PB2_HIGH
-            beeper_port: B
-            beeper_pin: 2
-            active_low: 0
-
-          - beeper_name: BEEPER_PB5_LOW
-            beeper_port: B
-            beeper_pin: 5
-            active_low: 1
-          - beeper_name: BEEPER_PB5_HIGH
-            beeper_port: B
-            beeper_pin: 5
-            active_low: 0
-
-          - beeper_name: BEEPER_PB8_LOW
-            beeper_port: B
-            beeper_pin: 8
-            active_low: 1
-          - beeper_name: BEEPER_PB8_HIGH
-            beeper_port: B
-            beeper_pin: 8
-            active_low: 0
-
-          - beeper_name: BEEPER_PB9_LOW
-            beeper_port: B
-            beeper_pin: 9
-            active_low: 1
-          - beeper_name: BEEPER_PB9_HIGH
-            beeper_port: B
-            beeper_pin: 9
-            active_low: 0
-
-          - beeper_name: BEEPER_PC13_LOW
-            beeper_port: C
-            beeper_pin: 13
-            active_low: 1
-          - beeper_name: BEEPER_PC13_HIGH
-            beeper_port: C
-            beeper_pin: 13
-            active_low: 0
+          - name: ALIGN_CW0
+            imu_align: CW0_DEG
+          - name: ALIGN_CW90
+            imu_align: CW90_DEG
+          - name: ALIGN_CW180
+            imu_align: CW180_DEG
+          - name: ALIGN_CW270
+            imu_align: CW270_DEG
+          - name: ALIGN_CW0_FLIP
+            imu_align: CW0_DEG_FLIP
+          - name: ALIGN_CW180_FLIP
+            imu_align: CW180_DEG_FLIP
 
     env:
-      PROJECT: stm32f405_lsm6dxx_i2c_beeper_scanner
+      INAV_VERSION: 7.1.2
+      BASE_TARGET: SPEEDYBEEF405WING
+      TARGET: CADDXF405_WING
+      RUNA_NAME: CADDX45+RUNA
 
     steps:
       - name: Install deps
         run: |
-          sudo apt-get update -y
+          sudo apt-get update -y -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends \
+            git \
+            build-essential \
+            g++ \
+            ruby \
+            cmake \
             make \
             gcc-arm-none-eabi \
             binutils-arm-none-eabi \
-            python3
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-dev \
+            ninja-build \
+            python3 \
+            python3-pip
 
-      - name: Create I2C beeper scanner source
+      - name: Clone INAV 7.1.2
         run: |
-          mkdir -p ${PROJECT}
+          set -e
 
-          cat > ${PROJECT}/main.c <<'EOF'
+          for i in 1 2 3 4 5; do
+            echo "Clone attempt $i"
+
+            git clone \
+              --branch ${INAV_VERSION} \
+              --depth 1 \
+              --single-branch \
+              --config http.version=HTTP/1.1 \
+              --config http.postBuffer=524288000 \
+              https://github.com/iNavFlight/inav.git inav && break
+
+            echo "Clone failed, retrying..."
+            rm -rf inav
+            sleep 10
+          done
+
+          test -d inav || exit 1
+          cd inav
+          git rev-parse HEAD
+
+      - name: Create CADDXF405_WING target from SPEEDYBEEF405WING
+        run: |
+          cd inav
+
+          rm -rf src/main/target/${TARGET}
+          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
+
+          if [ -f "src/main/target/${TARGET}/CMakeLists.txt" ]; then
+            sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
+          fi
+
+          echo "Created target ${TARGET} from ${BASE_TARGET}"
+
+      - name: Patch target hardware for RUNA FC45 SPIN FIX V2
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          target = os.environ["TARGET"]
+          imu_align = "${{ matrix.imu_align }}"
+
+          path = Path(f"src/main/target/{target}/target.h")
+
+          if not path.exists():
+              raise SystemExit(f"target.h not found: {path}")
+
+          text = path.read_text(encoding="utf-8")
+
+          # Board ID/name.
+          text = re.sub(
+              r'#define\s+TARGET_BOARD_IDENTIFIER\s+"[^"]+"',
+              '#define TARGET_BOARD_IDENTIFIER "CDF4"',
+              text
+          )
+
+          # Remove old IMU/BARO/MAG definitions from SpeedyBee base.
+          remove_patterns = [
+              r'^\s*#define\s+USE_IMU_ICM42605\s*$',
+              r'^\s*#define\s+IMU_ICM42605_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42605_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42605_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+ICM42605_EXTI_PIN\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_ICM42688P\s*$',
+              r'^\s*#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42688P_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+ICM42688P_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+ICM42688P_EXTI_PIN\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_BMI270\s*$',
+              r'^\s*#define\s+BMI270_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+BMI270_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+BMI270_EXTI_PIN\s+\S+\s*$',
+              r'^\s*#define\s+IMU_BMI270_ALIGN\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_MPU6000\s*$',
+              r'^\s*#define\s+MPU6000_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+MPU6000_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+MPU6000_EXTI_PIN\s+\S+\s*$',
+              r'^\s*#define\s+IMU_MPU6000_ALIGN\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_MPU6500\s*$',
+              r'^\s*#define\s+MPU6500_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+MPU6500_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+MPU6500_EXTI_PIN\s+\S+\s*$',
+              r'^\s*#define\s+IMU_MPU6500_ALIGN\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_IMU_LSM6DXX\s*$',
+              r'^\s*#define\s+LSM6DXX_CS_PIN\s+\S+\s*$',
+              r'^\s*#define\s+LSM6DXX_SPI_BUS\s+\S+\s*$',
+              r'^\s*#define\s+LSM6DXX_EXTI_PIN\s+\S+\s*$',
+              r'^\s*#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_BARO_BMP280\s*$',
+              r'^\s*#define\s+USE_BARO_DPS310\s*$',
+              r'^\s*#define\s+USE_BARO_MS5611\s*$',
+              r'^\s*#define\s+USE_BARO_BMP085\s*$',
+              r'^\s*#define\s+USE_BARO_ALL\s*$',
+              r'^\s*#define\s+USE_BARO_SPL06\s*$',
+              r'^\s*#define\s+BARO_I2C_BUS\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_MAG_ALL\s*$',
+              r'^\s*#define\s+USE_MAG_HMC5883\s*$',
+              r'^\s*#define\s+USE_MAG_QMC5883\s*$',
+              r'^\s*#define\s+USE_MAG_IST8310\s*$',
+              r'^\s*#define\s+USE_MAG_MAG3110\s*$',
+              r'^\s*#define\s+USE_MAG_LIS3MDL\s*$',
+              r'^\s*#define\s+MAG_I2C_BUS\s+\S+\s*$',
+          ]
+
+          for pattern in remove_patterns:
+              text = re.sub(pattern, "", text, flags=re.M)
+
+          text += f"""
+
           /*
-           * STM32F405 LSM6DXX I2C BEEPER scanner
+           * RUNA FC4.5 SPIN FIX V2
            *
-           * Diagnostic only.
-           * Do not fly.
-           * Do not install propeller.
+           * Restored old spinning base:
+           * Base target: SPEEDYBEEF405WING
+           * New target : CADDXF405_WING
            *
-           * Startup:
-           *   3 short beeps = firmware started.
+           * IMU  : LSM6DXX
+           * SPI  : BUS_SPI1
+           * CS   : PA4
+           * ALIGN: {imu_align}
            *
-           * Not found:
-           *   long beep, pause, repeat.
-           *
-           * Found:
-           *   long beeps  = I2C config number
-           *   short beeps = address number
-           *
-           * Example:
-           *   2 long + 1 short = I2C config 2, address 0x6A
+           * BARO : SPL06 on I2C1
+           * MAG  : HMC5883 on I2C1
            */
 
-          #include <stdint.h>
+          #define USE_IMU_LSM6DXX
+          #define LSM6DXX_SPI_BUS BUS_SPI1
+          #define LSM6DXX_CS_PIN PA4
+          #define IMU_LSM6DXX_ALIGN {imu_align}
 
-          #define BEEPER_PORT_LETTER '${{ matrix.beeper_port }}'
-          #define BEEPER_PIN_NUM     ${{ matrix.beeper_pin }}
-          #define BEEPER_ACTIVE_LOW  ${{ matrix.active_low }}
+          #define USE_BARO_SPL06
+          #define BARO_I2C_BUS BUS_I2C1
 
-          #define RCC_BASE        0x40023800UL
-          #define GPIOA_BASE      0x40020000UL
-          #define GPIOB_BASE      0x40020400UL
-          #define GPIOC_BASE      0x40020800UL
+          #define USE_MAG_HMC5883
+          #define MAG_I2C_BUS BUS_I2C1
+          """
 
-          #define I2C1_BASE       0x40005400UL
-          #define I2C2_BASE       0x40005800UL
-          #define I2C3_BASE       0x40005C00UL
+          path.write_text(text, encoding="utf-8")
 
-          #define REG32(addr)     (*(volatile uint32_t *)(addr))
+          print("===== RUNA target.h important lines =====")
+          for line in text.splitlines():
+              if any(x in line for x in [
+                  "TARGET_BOARD_IDENTIFIER",
+                  "USE_IMU_LSM6DXX",
+                  "LSM6DXX_SPI_BUS",
+                  "LSM6DXX_CS_PIN",
+                  "IMU_LSM6DXX_ALIGN",
+                  "USE_BARO_SPL06",
+                  "BARO_I2C_BUS",
+                  "USE_MAG_HMC5883",
+                  "MAG_I2C_BUS",
+              ]):
+                  print(line)
+          PY
 
-          #define RCC_AHB1ENR     REG32(RCC_BASE + 0x30)
-          #define RCC_APB1ENR     REG32(RCC_BASE + 0x40)
+      - name: Patch LSM6DXX gyroAlign fix
+        run: |
+          cd inav
 
-          #define GPIO_MODER(p)   REG32((p) + 0x00)
-          #define GPIO_OTYPER(p)  REG32((p) + 0x04)
-          #define GPIO_OSPEEDR(p) REG32((p) + 0x08)
-          #define GPIO_PUPDR(p)   REG32((p) + 0x0C)
-          #define GPIO_BSRR(p)    REG32((p) + 0x18)
-          #define GPIO_AFRL(p)    REG32((p) + 0x20)
-          #define GPIO_AFRH(p)    REG32((p) + 0x24)
+          python3 <<'PY'
+          from pathlib import Path
 
-          #define I2C_CR1(i)      REG32((i) + 0x00)
-          #define I2C_CR2(i)      REG32((i) + 0x04)
-          #define I2C_OAR1(i)     REG32((i) + 0x08)
-          #define I2C_DR(i)       REG32((i) + 0x10)
-          #define I2C_SR1(i)      REG32((i) + 0x14)
-          #define I2C_SR2(i)      REG32((i) + 0x18)
-          #define I2C_CCR(i)      REG32((i) + 0x1C)
-          #define I2C_TRISE(i)    REG32((i) + 0x20)
+          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
 
-          #define I2C_CR1_PE      (1U << 0)
-          #define I2C_CR1_START   (1U << 8)
-          #define I2C_CR1_STOP    (1U << 9)
-          #define I2C_CR1_ACK     (1U << 10)
-          #define I2C_CR1_SWRST   (1U << 15)
+          if not path.exists():
+              raise SystemExit("ERROR: accgyro_lsm6dxx.c not found")
 
-          #define I2C_SR1_SB      (1U << 0)
-          #define I2C_SR1_ADDR    (1U << 1)
-          #define I2C_SR1_BTF     (1U << 2)
-          #define I2C_SR1_RXNE    (1U << 6)
-          #define I2C_SR1_TXE     (1U << 7)
-          #define I2C_SR1_AF      (1U << 10)
+          text = path.read_text(encoding="utf-8")
 
-          #define LSM6DXX_WHOAMI_REG 0x0F
+          fix = "gyro->gyroAlign = gyro->busDev->param;"
 
-          typedef struct {
-              uint32_t i2c;
-              uint32_t scl_port;
-              uint8_t scl_pin;
-              uint8_t scl_af;
-              uint32_t sda_port;
-              uint8_t sda_pin;
-              uint8_t sda_af;
-              uint8_t config_number;
-          } i2c_config_t;
+          if fix in text:
+              print("LSM6DXX gyroAlign fix already present")
+          else:
+              old = "gyro->intStatusFn = gyroCheckDataReady;"
+              new = "gyro->intStatusFn = gyroCheckDataReady;\n    gyro->gyroAlign = gyro->busDev->param;"
 
-          static void delay_cycles(volatile uint32_t n)
+              if old not in text:
+                  raise SystemExit("ERROR: Pattern not found: gyro->intStatusFn = gyroCheckDataReady;")
+
+              text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+              print("LSM6DXX gyroAlign fix added")
+
+          print("===== gyroAlign check =====")
+          for line in text.splitlines():
+              if "gyroAlign" in line or "gyroCheckDataReady" in line:
+                  print(line)
+          PY
+
+      - name: Patch LSM6DXX restored robust detect
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
+
+          if not path.exists():
+              print("accgyro_lsm6dxx.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          sig = "static bool lsm6dxxDetect"
+
+          start = text.find(sig)
+
+          if start == -1:
+              print("lsm6dxxDetect not found, skip")
+              raise SystemExit(0)
+
+          brace = text.find("{", start)
+          depth = 0
+          end = -1
+
+          for i in range(brace, len(text)):
+              if text[i] == "{":
+                  depth += 1
+              elif text[i] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+
+          if end == -1:
+              print("lsm6dxxDetect end not found, skip")
+              raise SystemExit(0)
+
+          repl = """static bool lsm6dxxDetect(busDevice_t * dev)
           {
-              while (n--) {
-                  __asm volatile ("nop");
-              }
-          }
+              uint8_t tmp = 0;
 
-          static void delay_ms(uint32_t ms)
-          {
-              while (ms--) {
-                  delay_cycles(4000);
-              }
-          }
-
-          static uint32_t port_by_letter(char c)
-          {
-              if (c == 'A') return GPIOA_BASE;
-              if (c == 'B') return GPIOB_BASE;
-              return GPIOC_BASE;
-          }
-
-          static uint32_t beeper_port(void)
-          {
-              return port_by_letter(BEEPER_PORT_LETTER);
-          }
-
-          static void gpio_output(uint32_t port, uint8_t pin)
-          {
-              GPIO_MODER(port) &= ~(3U << (pin * 2));
-              GPIO_MODER(port) |=  (1U << (pin * 2));
-              GPIO_OTYPER(port) &= ~(1U << pin);
-              GPIO_OSPEEDR(port) &= ~(3U << (pin * 2));
-              GPIO_OSPEEDR(port) |=  (2U << (pin * 2));
-              GPIO_PUPDR(port) &= ~(3U << (pin * 2));
-          }
-
-          static void gpio_af_od_pullup(uint32_t port, uint8_t pin, uint8_t af)
-          {
-              GPIO_MODER(port) &= ~(3U << (pin * 2));
-              GPIO_MODER(port) |=  (2U << (pin * 2));
-
-              GPIO_OTYPER(port) |= (1U << pin); // open-drain
-
-              GPIO_OSPEEDR(port) &= ~(3U << (pin * 2));
-              GPIO_OSPEEDR(port) |=  (3U << (pin * 2));
-
-              GPIO_PUPDR(port) &= ~(3U << (pin * 2));
-              GPIO_PUPDR(port) |=  (1U << (pin * 2)); // pull-up
-
-              if (pin < 8) {
-                  GPIO_AFRL(port) &= ~(0xFU << (pin * 4));
-                  GPIO_AFRL(port) |=  ((uint32_t)af << (pin * 4));
-              } else {
-                  uint8_t p = pin - 8;
-                  GPIO_AFRH(port) &= ~(0xFU << (p * 4));
-                  GPIO_AFRH(port) |=  ((uint32_t)af << (p * 4));
-              }
-          }
-
-          static void gpio_set_pin(uint32_t port, uint8_t pin)
-          {
-              GPIO_BSRR(port) = (1U << pin);
-          }
-
-          static void gpio_clear_pin(uint32_t port, uint8_t pin)
-          {
-              GPIO_BSRR(port) = (1U << (pin + 16));
-          }
-
-          static void beeper_on(void)
-          {
-              if (BEEPER_ACTIVE_LOW) {
-                  gpio_clear_pin(beeper_port(), BEEPER_PIN_NUM);
-              } else {
-                  gpio_set_pin(beeper_port(), BEEPER_PIN_NUM);
-              }
-          }
-
-          static void beeper_off(void)
-          {
-              if (BEEPER_ACTIVE_LOW) {
-                  gpio_set_pin(beeper_port(), BEEPER_PIN_NUM);
-              } else {
-                  gpio_clear_pin(beeper_port(), BEEPER_PIN_NUM);
-              }
-          }
-
-          static void beeper_setup(void)
-          {
-              gpio_output(beeper_port(), BEEPER_PIN_NUM);
-              beeper_off();
-          }
-
-          static void beep_short(void)
-          {
-              beeper_on();
-              delay_ms(120);
-              beeper_off();
-              delay_ms(180);
-          }
-
-          static void beep_long(void)
-          {
-              beeper_on();
-              delay_ms(550);
-              beeper_off();
-              delay_ms(300);
-          }
-
-          static void startup_beep(void)
-          {
-              beep_short();
-              beep_short();
-              beep_short();
-              delay_ms(1000);
-          }
-
-          static void beep_not_found(void)
-          {
-              while (1) {
-                  beep_long();
-                  delay_ms(1200);
-              }
-          }
-
-          static void beep_found(uint8_t i2c_config_number, uint8_t addr_number)
-          {
-              while (1) {
-                  for (uint8_t i = 0; i < i2c_config_number; i++) {
-                      beep_long();
-                  }
-
-                  delay_ms(900);
-
-                  for (uint8_t i = 0; i < addr_number; i++) {
-                      beep_short();
-                  }
-
-                  delay_ms(1800);
-              }
-          }
-
-          static const i2c_config_t i2c_configs[] = {
-              { I2C1_BASE, GPIOB_BASE, 6, 4, GPIOB_BASE, 7, 4, 1 },  // I2C1 PB6/PB7
-              { I2C1_BASE, GPIOB_BASE, 8, 4, GPIOB_BASE, 9, 4, 2 },  // I2C1 PB8/PB9
-              { I2C2_BASE, GPIOB_BASE, 10, 4, GPIOB_BASE, 11, 4, 3 }, // I2C2 PB10/PB11
-              { I2C3_BASE, GPIOA_BASE, 8, 4, GPIOC_BASE, 9, 4, 4 },  // I2C3 PA8/PC9
-          };
-
-          static const uint8_t i2c_addrs[] = {
-              0x6A,
-              0x6B,
-          };
-
-          static void clocks_setup(void)
-          {
-              RCC_AHB1ENR |= (1U << 0) | (1U << 1) | (1U << 2); // GPIO A/B/C
-              RCC_APB1ENR |= (1U << 21) | (1U << 22) | (1U << 23); // I2C1/2/3
-              delay_ms(10);
-          }
-
-          static uint8_t wait_flag_set(uint32_t reg_addr, uint32_t mask, uint32_t timeout)
-          {
-              while (!(REG32(reg_addr) & mask)) {
-                  if (--timeout == 0) {
-                      return 0;
-                  }
-              }
-              return 1;
-          }
-
-          static uint8_t wait_flag_clear(uint32_t reg_addr, uint32_t mask, uint32_t timeout)
-          {
-              while (REG32(reg_addr) & mask) {
-                  if (--timeout == 0) {
-                      return 0;
-                  }
-              }
-              return 1;
-          }
-
-          static void i2c_reset(uint32_t i2c)
-          {
-              I2C_CR1(i2c) |= I2C_CR1_SWRST;
-              delay_ms(2);
-              I2C_CR1(i2c) &= ~I2C_CR1_SWRST;
-              delay_ms(2);
-          }
-
-          static void i2c_setup(const i2c_config_t *cfg)
-          {
-              gpio_af_od_pullup(cfg->scl_port, cfg->scl_pin, cfg->scl_af);
-              gpio_af_od_pullup(cfg->sda_port, cfg->sda_pin, cfg->sda_af);
-
-              i2c_reset(cfg->i2c);
-
-              I2C_CR1(cfg->i2c) = 0;
+              busSetSpeed(dev, BUS_SPEED_INITIALIZATION);
+              delay(150);
+              busRead(dev, LSM6DXX_REG_WHO_AM_I, &tmp);
 
               /*
-               * APB1 default is around 16 MHz on HSI in this baremetal setup.
-               * Standard mode 100 kHz.
+               * RUNA FC4.5 restored robust LSM6DXX detect.
+               *
+               * This recreates the old variant where the board connected and
+               * GYRO/ACC appeared, but now gyroAlign fix and IMU align matrix
+               * are also applied.
+               *
+               * Accept common LSM6DXX IDs if read is valid.
+               * If read is invalid, keep LSM6DS3 as fallback so INAV still starts.
                */
-              I2C_CR2(cfg->i2c) = 16;
-              I2C_CCR(cfg->i2c) = 80;
-              I2C_TRISE(cfg->i2c) = 17;
-
-              I2C_CR1(cfg->i2c) |= I2C_CR1_PE;
-              delay_ms(2);
-          }
-
-          static uint8_t i2c_read_reg(uint32_t i2c, uint8_t addr, uint8_t reg, uint8_t *out)
-          {
-              volatile uint32_t tmp;
-
-              I2C_SR1(i2c) &= ~I2C_SR1_AF;
-
-              I2C_CR1(i2c) |= I2C_CR1_START;
-              if (!wait_flag_set(i2c + 0x14, I2C_SR1_SB, 100000)) {
-                  I2C_CR1(i2c) |= I2C_CR1_STOP;
-                  return 0;
+              if (tmp == 0x69 || tmp == 0x6A || tmp == 0x6B || tmp == 0x6C || tmp == 0x6D) {
+                  lsm6dID = tmp;
+              } else {
+                  lsm6dID = LSM6DS3_CHIP_ID;
               }
 
-              I2C_DR(i2c) = (addr << 1) | 0;
-              if (!wait_flag_set(i2c + 0x14, I2C_SR1_ADDR | I2C_SR1_AF, 100000)) {
-                  I2C_CR1(i2c) |= I2C_CR1_STOP;
-                  return 0;
-              }
+              return true;
+          }"""
 
-              if (I2C_SR1(i2c) & I2C_SR1_AF) {
-                  I2C_SR1(i2c) &= ~I2C_SR1_AF;
-                  I2C_CR1(i2c) |= I2C_CR1_STOP;
-                  return 0;
-              }
+          text = text[:start] + repl + text[end:]
+          path.write_text(text, encoding="utf-8")
 
-              tmp = I2C_SR2(i2c);
-              (void)tmp;
+          print("RUNA restored robust LSM6DXX detect patched")
+          PY
 
-              I2C_DR(i2c) = reg;
-              if (!wait_flag_set(i2c + 0x14, I2C_SR1_TXE, 100000)) {
-                  I2C_CR1(i2c) |= I2C_CR1_STOP;
-                  return 0;
-              }
-
-              I2C_CR1(i2c) |= I2C_CR1_START;
-              if (!wait_flag_set(i2c + 0x14, I2C_SR1_SB, 100000)) {
-                  I2C_CR1(i2c) |= I2C_CR1_STOP;
-                  return 0;
-              }
-
-              I2C_DR(i2c) = (addr << 1) | 1;
-              if (!wait_flag_set(i2c + 0x14, I2C_SR1_ADDR | I2C_SR1_AF, 100000)) {
-                  I2C_CR1(i2c) |= I2C_CR1_STOP;
-                  return 0;
-              }
-
-              if (I2C_SR1(i2c) & I2C_SR1_AF) {
-                  I2C_SR1(i2c) &= ~I2C_SR1_AF;
-                  I2C_CR1(i2c) |= I2C_CR1_STOP;
-                  return 0;
-              }
-
-              I2C_CR1(i2c) &= ~I2C_CR1_ACK;
-
-              tmp = I2C_SR2(i2c);
-              (void)tmp;
-
-              I2C_CR1(i2c) |= I2C_CR1_STOP;
-
-              if (!wait_flag_set(i2c + 0x14, I2C_SR1_RXNE, 100000)) {
-                  return 0;
-              }
-
-              *out = (uint8_t)I2C_DR(i2c);
-              return 1;
-          }
-
-          static uint8_t is_lsm6dxx_id(uint8_t id)
-          {
-              return id == 0x69 ||
-                     id == 0x6A ||
-                     id == 0x6B ||
-                     id == 0x6C ||
-                     id == 0x6D;
-          }
-
-          int main(void)
-          {
-              clocks_setup();
-
-              beeper_setup();
-              startup_beep();
-
-              delay_ms(1000);
-
-              for (unsigned i = 0; i < sizeof(i2c_configs) / sizeof(i2c_configs[0]); i++) {
-                  const i2c_config_t *cfg = &i2c_configs[i];
-
-                  i2c_setup(cfg);
-
-                  for (unsigned a = 0; a < sizeof(i2c_addrs) / sizeof(i2c_addrs[0]); a++) {
-                      uint8_t id = 0xFF;
-
-                      for (uint8_t attempt = 0; attempt < 10; attempt++) {
-                          if (i2c_read_reg(cfg->i2c, i2c_addrs[a], LSM6DXX_WHOAMI_REG, &id)) {
-                              if (is_lsm6dxx_id(id)) {
-                                  beep_found(cfg->config_number, a + 1);
-                              }
-                          }
-
-                          delay_ms(30);
-                      }
-                  }
-
-                  I2C_CR1(cfg->i2c) &= ~I2C_CR1_PE;
-                  delay_ms(10);
-              }
-
-              beep_not_found();
-          }
-          EOF
-
-          cat > ${PROJECT}/startup.c <<'EOF'
-          #include <stdint.h>
-
-          extern int main(void);
-
-          extern uint32_t _estack;
-          extern uint32_t _sidata;
-          extern uint32_t _sdata;
-          extern uint32_t _edata;
-          extern uint32_t _sbss;
-          extern uint32_t _ebss;
-
-          void reset_handler(void);
-          void default_handler(void);
-
-          __attribute__((section(".isr_vector")))
-          void (* const vector_table[])(void) = {
-              (void (*)(void))(&_estack),
-              reset_handler,
-              default_handler,
-              default_handler,
-              default_handler,
-              default_handler,
-              default_handler,
-              0,
-              0,
-              0,
-              0,
-              default_handler,
-              default_handler,
-              0,
-              default_handler,
-              default_handler,
-          };
-
-          void reset_handler(void)
-          {
-              uint32_t *src = &_sidata;
-              uint32_t *dst = &_sdata;
-
-              while (dst < &_edata) {
-                  *dst++ = *src++;
-              }
-
-              dst = &_sbss;
-
-              while (dst < &_ebss) {
-                  *dst++ = 0;
-              }
-
-              main();
-
-              while (1) {}
-          }
-
-          void default_handler(void)
-          {
-              while (1) {}
-          }
-          EOF
-
-          cat > ${PROJECT}/linker.ld <<'EOF'
-          MEMORY
-          {
-              FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
-              RAM (xrw)   : ORIGIN = 0x20000000, LENGTH = 128K
-          }
-
-          _estack = ORIGIN(RAM) + LENGTH(RAM);
-
-          SECTIONS
-          {
-              .isr_vector :
-              {
-                  KEEP(*(.isr_vector))
-              } > FLASH
-
-              .text :
-              {
-                  *(.text*)
-                  *(.rodata*)
-                  . = ALIGN(4);
-                  _etext = .;
-              } > FLASH
-
-              _sidata = LOADADDR(.data);
-
-              .data : AT(_etext)
-              {
-                  . = ALIGN(4);
-                  _sdata = .;
-                  *(.data*)
-                  . = ALIGN(4);
-                  _edata = .;
-              } > RAM
-
-              .bss :
-              {
-                  . = ALIGN(4);
-                  _sbss = .;
-                  *(.bss*)
-                  *(COMMON)
-                  . = ALIGN(4);
-                  _ebss = .;
-              } > RAM
-          }
-          EOF
-
-          cat > ${PROJECT}/Makefile <<'EOF'
-          PROJECT = i2c_beeper_scanner
-          BUILD_DIR = build
-
-          PREFIX ?= arm-none-eabi
-          CC = $(PREFIX)-gcc
-          OBJCOPY = $(PREFIX)-objcopy
-          SIZE = $(PREFIX)-size
-
-          CFLAGS = -Os -g -Wall -Wextra \
-              -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 \
-              -ffreestanding -nostdlib
-
-          LDFLAGS = -Tlinker.ld \
-              -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 \
-              -nostdlib -Wl,--gc-sections
-
-          SRCS = startup.c main.c
-          OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
-
-          all: $(BUILD_DIR)/$(PROJECT).elf $(BUILD_DIR)/$(PROJECT).bin $(BUILD_DIR)/$(PROJECT).hex
-          	$(SIZE) $(BUILD_DIR)/$(PROJECT).elf
-
-          $(BUILD_DIR):
-          	mkdir -p $(BUILD_DIR)
-
-          $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
-          	$(CC) $(CFLAGS) -c $< -o $@
-
-          $(BUILD_DIR)/$(PROJECT).elf: $(OBJS)
-          	$(CC) $(LDFLAGS) $^ -o $@
-
-          $(BUILD_DIR)/$(PROJECT).bin: $(BUILD_DIR)/$(PROJECT).elf
-          	$(OBJCOPY) -O binary $< $@
-
-          $(BUILD_DIR)/$(PROJECT).hex: $(BUILD_DIR)/$(PROJECT).elf
-          	$(OBJCOPY) -O ihex $< $@
-
-          clean:
-          	rm -rf $(BUILD_DIR)
-          EOF
-
-      - name: Build I2C beeper scanner
+      - name: Patch RUNA name in MSP
         run: |
-          cd ${PROJECT}
-          make clean
-          make -j2
+          cd inav
 
-      - name: Collect artifacts
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          import os
+
+          runa_name = os.environ["RUNA_NAME"]
+
+          path = Path("src/main/fc/fc_msp.c")
+
+          if not path.exists():
+              print("fc_msp.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
+
+          replacement = f'''const char *runaTargetName = "{runa_name}";
+                  sbufWriteU8(dst, strlen(runaTargetName));
+                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));'''
+
+          text, count = re.subn(pattern, replacement, text, count=1)
+
+          path.write_text(text, encoding="utf-8")
+          print("MSP RUNA name patch count:", count)
+          PY
+
+      - name: Patch startup OSD text
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("osd.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
+          new = 'tfp_sprintf(string_buffer, "RUNA45 FIX");'
+
+          if old in text:
+              text = text.replace(old, new, 1)
+              text = text.replace(
+                  'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
+                  'uint8_t xPos = OSD_CENTER_S(string_buffer);',
+                  1
+              )
+              print("Startup OSD text patched")
+          else:
+              print("WARNING: startup text pattern not found")
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Configure CMake
+        run: |
+          cd inav
+          mkdir -p build
+          cd build
+          cmake ..
+
+      - name: Check target exists
+        run: |
+          cd inav/build
+
+          if make help | grep -w "${TARGET}"; then
+            echo "Target found: ${TARGET}"
+          else
+            echo "TARGET NOT FOUND: ${TARGET}"
+            make help | grep -i -E "CADDX|SPEEDY|F405|WING" || true
+            exit 1
+          fi
+
+      - name: Build firmware
+        run: |
+          cd inav/build
+          make clean_${TARGET} || true
+          make ${TARGET} -j2 VERBOSE=1
+
+      - name: Find built files
+        if: always()
+        run: |
+          echo "Built firmware files:"
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+
+      - name: Collect firmware and CLI
         run: |
           mkdir -p out
 
-          cp ${PROJECT}/build/i2c_beeper_scanner.bin out/STM32F405_LSM6DXX_I2C_BEEPER_SCANNER_${{ matrix.beeper_name }}.bin
-          cp ${PROJECT}/build/i2c_beeper_scanner.hex out/STM32F405_LSM6DXX_I2C_BEEPER_SCANNER_${{ matrix.beeper_name }}.hex
-          cp ${PROJECT}/build/i2c_beeper_scanner.elf out/STM32F405_LSM6DXX_I2C_BEEPER_SCANNER_${{ matrix.beeper_name }}.elf
+          FOUND=0
 
-          cat > out/README_${{ matrix.beeper_name }}.txt <<'EOF'
-          STM32F405 LSM6DXX I2C BEEPER SCANNER
+          while IFS= read -r f; do
+            base="$(basename "$f")"
+            dst="out/RUNA_FC45_SPIN_FIX_V2_${{ matrix.name }}_${base}"
+            cp "$f" "$dst"
+            echo "Copied: $dst"
+            FOUND=$((FOUND + 1))
+          done < <(find inav/build -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
 
-          Diagnostic only.
+          if [ "$FOUND" -eq 0 ]; then
+            echo "ERROR: no firmware files found"
+            find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+            exit 1
+          fi
+
+          cat > out/RUNA_FC45_SPIN_FIX_V2_${{ matrix.name }}_BASE.cli <<'EOF'
+          batch start
+
+          # RUNA FC4.5 SPIN FIX V2
+          # Variant: ${{ matrix.name }}
+          # IMU align: ${{ matrix.imu_align }}
+          #
+          # Diagnostic first. Do not fly until 3D model is correct.
+
+          feature -GPS
+          feature OSD
+          feature PWM_OUTPUT_ENABLE
+          feature TELEMETRY
+          feature CURRENT_METER
+          feature BLACKBOX
+
+          set acc_hardware = LSM6DXX
+          set baro_hardware = SPL06
+          set mag_hardware = HMC5883
+
+          set align_mag = CW0FLIP
+
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 1800
+
+          set gyro_zero_x = 0
+          set gyro_zero_y = 0
+          set gyro_zero_z = 0
+
+          set acczero_x = 0
+          set acczero_y = 0
+          set acczero_z = 0
+
+          set accgain_x = 4096
+          set accgain_y = 4096
+          set accgain_z = 4096
+
+          # calm filters for table test
+          set gyro_main_lpf_hz = 10
+          set gyro_anti_aliasing_lpf_hz = 50
+          set dynamic_gyro_notch_min_hz = 30
+          set dynamic_gyro_notch_q = 250
+          set dterm_lpf_hz = 5
+
+          set receiver_type = SERIAL
+          set serialrx_provider = CRSF
+
+          set vbat_adc_channel = 1
+          set rssi_adc_channel = 4
+          set current_adc_channel = 2
+          set airspeed_adc_channel = 3
+
+          set nav_extra_arming_safety = OFF
+          set gps_auto_config = OFF
+          set gps_auto_baud = OFF
+          set gps_min_sats = 0
+          set failsafe_procedure = NONE
+          set small_angle = 180
+
+          # very low manual rates for safe bench test
+          profile 1
+          set roll_rate = 5
+          set pitch_rate = 5
+          set yaw_rate = 2
+          set rc_expo = 50
+          set rc_yaw_expo = 50
+
+          save
+          EOF
+
+          cat > out/README_RUNA_FC45_SPIN_FIX_V2_${{ matrix.name }}.txt <<'EOF'
+          RUNA FC45 SPIN FIX V2
+
+          This rebuilds the old spinning FC4.5 custom firmware path:
+          - INAV 7.1.2
+          - Base target: SPEEDYBEEF405WING
+          - New target: CADDXF405_WING
+          - IMU: LSM6DXX
+          - SPI: BUS_SPI1
+          - CS: PA4
+          - BARO: SPL06
+          - MAG: HMC5883
+
+          Added:
+          - LSM6DXX gyroAlign fix
+          - restored robust LSM6DXX detect
+          - IMU align matrix variant
+          - calm gyro filters in CLI
+
+          Variant:
+          ${{ matrix.name }}
+
+          IMU align:
+          ${{ matrix.imu_align }}
+
+          Flash:
+          1. DFU
+          2. Full chip erase
+          3. Flash this variant HEX
+
+          After flash:
+          1. CLI:
+             defaults
+             save
+
+          2. Wait 15 seconds, do not move board.
+
+          3. Apply:
+             RUNA_FC45_SPIN_FIX_V2_${{ matrix.name }}_BASE.cli
+
+          4. Calibration -> Calibrate Accelerometer
+
+          5. Check:
+             status
+             get align_board
+
+          Good:
+          - GYRO=OK
+          - ACC=OK
+          - BARO=OK
+          - MAG=OK
+          - 3D model does not spin fast
+          - axes are correct or close
+
+          Bad:
+          - GYRO/ACC unavailable
+          - 3D spins fast
+          - board does not connect
+
           Do not fly.
           Do not install propeller.
-
-          Startup:
-          - 3 short beeps = scanner started.
-
-          Not found:
-          - long beep, pause, repeat.
-
-          Found:
-          - long beeps  = I2C config number
-          - short beeps = address number
-
-          I2C config:
-          1 = I2C1 PB6/PB7
-          2 = I2C1 PB8/PB9
-          3 = I2C2 PB10/PB11
-          4 = I2C3 PA8/PC9
-
-          Address:
-          1 short = 0x6A
-          2 short = 0x6B
-
-          Example:
-          2 long + 1 short = I2C1 PB8/PB9, address 0x6A
           EOF
 
           ls -lah out
 
-      - name: Upload I2C beeper scanner
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: STM32F405-LSM6DXX-I2C-BEEPER-SCANNER-${{ matrix.beeper_name }}
+          name: RUNA-FC45-SPIN-FIX-V2-${{ matrix.name }}
           path: out/*
-          
