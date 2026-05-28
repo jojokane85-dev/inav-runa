@@ -1,4 +1,4 @@
-name: Build RUNA FC45 BLUEBERRY V8
+name: Build RUNA FC45 NEUTRON V8B
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
 
     env:
       INAV_VERSION: 8.0.1
-      BASE_TARGET: BLUEBERRYF435WING
+      BASE_TARGET: NEUTRONRCF435WING
       TARGET: CADDXF405_45_WING
       RUNA_NAME: CADDX45+RUNA
 
@@ -52,6 +52,7 @@ jobs:
 
           for i in 1 2 3 4 5; do
             echo "Clone attempt $i"
+
             git clone \
               --branch ${INAV_VERSION} \
               --depth 1 \
@@ -66,22 +67,24 @@ jobs:
           done
 
           test -d inav || exit 1
+
           cd inav
+          echo "Commit:"
           git rev-parse HEAD
 
-      - name: Check BLUEBERRY target
+      - name: Check NEUTRON target
         run: |
           cd inav
 
-          echo "Available BLUEBERRY / F405 / WING targets:"
-          find src/main/target -maxdepth 1 -type d | grep -i -E "BLUE|BERRY|F405|F435|WING" || true
+          echo "Available NEUTRON / F405 / F435 / WING targets:"
+          find src/main/target -maxdepth 1 -type d | grep -i -E "NEUTRON|F405|F435|WING" || true
 
           if [ ! -d "src/main/target/${BASE_TARGET}" ]; then
             echo "ERROR: ${BASE_TARGET} not found in INAV ${INAV_VERSION}"
             exit 1
           fi
 
-      - name: Create CADDXF405_45_WING from BLUEBERRYF435WING
+      - name: Create CADDXF405_45_WING from NEUTRONRCF435WING
         run: |
           cd inav
 
@@ -98,7 +101,7 @@ jobs:
 
           echo "Created ${TARGET} from ${BASE_TARGET}"
 
-      - name: Patch target.h for RUNA FC4.5 BLUEBERRY V8
+      - name: Patch target.h for RUNA FC45 NEUTRON V8B
         run: |
           cd inav
 
@@ -111,12 +114,12 @@ jobs:
           imu_align = "${{ matrix.imu_align }}"
 
           path = Path(f"src/main/target/{target}/target.h")
+
           if not path.exists():
               raise SystemExit(f"target.h not found: {path}")
 
           text = path.read_text(encoding="utf-8", errors="ignore")
 
-          # Clean conflicting definitions from base target.
           remove_patterns = [
               r'^\s*#define\s+TARGET_BOARD_IDENTIFIER\s+"[^"]+"\s*$',
               r'^\s*#define\s+USBD_PRODUCT_STRING\s+"[^"]+"\s*$',
@@ -134,6 +137,7 @@ jobs:
               r'^\s*#define\s+ICM42605_.*$',
               r'^\s*#define\s+ICM42688P_.*$',
               r'^\s*#define\s+LSM6DXX_.*$',
+
               r'^\s*#define\s+IMU_MPU6000_ALIGN\s+\S+\s*$',
               r'^\s*#define\s+IMU_MPU6500_ALIGN\s+\S+\s*$',
               r'^\s*#define\s+IMU_BMI270_ALIGN\s+\S+\s*$',
@@ -192,9 +196,10 @@ jobs:
           text += f"""
 
           /*
-           * RUNA FC4.5 BLUEBERRY V8
+           * RUNA FC4.5 NEUTRON V8B
            *
-           * Base target: BLUEBERRYF435WING
+           * Base target: NEUTRONRCF435WING
+           *
            * Working FC4.5 data:
            * GYRO/ACC: LSM6DXX
            * BARO: DPS310
@@ -265,7 +270,7 @@ jobs:
 
           path.write_text(text, encoding="utf-8")
 
-          print("===== RUNA V8 target.h important lines =====")
+          print("===== RUNA V8B target.h important lines =====")
           for line in text.splitlines():
               if any(k in line for k in [
                   "TARGET_BOARD_IDENTIFIER",
@@ -310,6 +315,7 @@ jobs:
           ]
 
           patched = 0
+
           for pattern in patterns:
               if re.search(pattern, text):
                   replacement = f'''const char *runaTargetName = "{runa_name}";
@@ -321,6 +327,47 @@ jobs:
 
           path.write_text(text, encoding="utf-8")
           print("MSP RUNA name patch count:", patched)
+          PY
+
+      - name: Patch startup OSD text
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("osd.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8", errors="ignore")
+
+          variants = [
+              'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);',
+              'tfp_sprintf(string_buffer, "INAV %s", FC_VERSION_STRING);',
+          ]
+
+          patched = False
+
+          for old in variants:
+              if old in text:
+                  text = text.replace(old, 'tfp_sprintf(string_buffer, "RUNA45 NEUTRON");', 1)
+                  patched = True
+                  break
+
+          if patched:
+              text = text.replace(
+                  'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
+                  'uint8_t xPos = OSD_CENTER_S(string_buffer);',
+                  1
+              )
+              print("Startup OSD text patched")
+          else:
+              print("WARNING: startup text pattern not found")
+
+          path.write_text(text, encoding="utf-8")
           PY
 
       - name: Configure CMake
@@ -338,7 +385,7 @@ jobs:
             echo "Target found: ${TARGET}"
           else
             echo "TARGET NOT FOUND: ${TARGET}"
-            make help | grep -i -E "CADDX|BLUE|BERRY|F405|F435|WING" || true
+            make help | grep -i -E "CADDX|NEUTRON|F405|F435|WING" || true
             exit 1
           fi
 
@@ -362,7 +409,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="out/RUNA_FC45_BLUEBERRY_V8_${{ matrix.name }}_${base}"
+            dst="out/RUNA_FC45_NEUTRON_V8B_${{ matrix.name }}_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -374,10 +421,10 @@ jobs:
             exit 1
           fi
 
-          cat > out/RUNA_FC45_BLUEBERRY_V8_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
+          cat > out/RUNA_FC45_NEUTRON_V8B_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
           batch start
 
-          # RUNA FC4.5 BLUEBERRY V8
+          # RUNA FC4.5 NEUTRON V8B
           # Variant: ${{ matrix.name }}
           # IMU align: ${{ matrix.imu_align }}
 
@@ -442,11 +489,11 @@ jobs:
           save
           EOF
 
-          cat > out/README_RUNA_FC45_BLUEBERRY_V8_${{ matrix.name }}.txt <<'EOF'
-          RUNA FC45 BLUEBERRY V8
+          cat > out/README_RUNA_FC45_NEUTRON_V8B_${{ matrix.name }}.txt <<'EOF'
+          RUNA FC45 NEUTRON V8B
 
           Base:
-          - BLUEBERRYF435WING
+          - NEUTRONRCF435WING
 
           Target:
           - CADDXF405_45_WING
@@ -496,5 +543,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-BLUEBERRY-V8-${{ matrix.name }}
+          name: RUNA-FC45-NEUTRON-V8B-${{ matrix.name }}
           path: out/*
