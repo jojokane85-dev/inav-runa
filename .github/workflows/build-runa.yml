@@ -1,4 +1,4 @@
-name: Build STM32F405 LSM6DXX Low Level Scanner V2
+name: Build STM32F405 LSM6DXX Baremetal Scanner V3
 
 on:
   workflow_dispatch:
@@ -12,127 +12,225 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - led_name: LED_PC13
-            led_port: GPIOC
-            led_pin: GPIO13
+          - led_name: LED_PC13_LOW
+            led_port: C
+            led_pin: 13
+            active_low: 1
+          - led_name: LED_PC13_HIGH
+            led_port: C
+            led_pin: 13
+            active_low: 0
 
-          - led_name: LED_PB2
-            led_port: GPIOB
-            led_pin: GPIO2
+          - led_name: LED_PB2_LOW
+            led_port: B
+            led_pin: 2
+            active_low: 1
+          - led_name: LED_PB2_HIGH
+            led_port: B
+            led_pin: 2
+            active_low: 0
 
-          - led_name: LED_PB9
-            led_port: GPIOB
-            led_pin: GPIO9
+          - led_name: LED_PB9_LOW
+            led_port: B
+            led_pin: 9
+            active_low: 1
+          - led_name: LED_PB9_HIGH
+            led_port: B
+            led_pin: 9
+            active_low: 0
 
-          - led_name: LED_PA8
-            led_port: GPIOA
-            led_pin: GPIO8
+          - led_name: LED_PA8_LOW
+            led_port: A
+            led_pin: 8
+            active_low: 1
+          - led_name: LED_PA8_HIGH
+            led_port: A
+            led_pin: 8
+            active_low: 0
 
     env:
-      PROJECT: stm32f405_lsm6dxx_scanner
+      PROJECT: stm32f405_lsm6dxx_scanner_v3
 
     steps:
       - name: Install deps
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            git \
             make \
             gcc-arm-none-eabi \
             binutils-arm-none-eabi \
-            libnewlib-arm-none-eabi \
             python3
 
-      - name: Clone libopencm3
-        run: |
-          git clone --depth 1 https://github.com/libopencm3/libopencm3.git
-          cd libopencm3
-          make -j2
-
-      - name: Create scanner source
+      - name: Create baremetal scanner source
         run: |
           mkdir -p ${PROJECT}
 
           cat > ${PROJECT}/main.c <<'EOF'
           /*
-           * STM32F405 LSM6DXX low-level SPI scanner V2
+           * STM32F405 LSM6DXX baremetal scanner V3
            *
+           * No libopencm3.
+           * No external linker script.
            * Diagnostic firmware only.
            * Do not fly.
-           * Do not install propeller.
-           *
-           * It scans:
-           * - SPI1 / SPI2 / SPI3
-           * - CS pins: PA4, PA15, PB0, PB1, PB2, PB12, PC4, PC13, PC14, PC15
-           * - LSM6DXX WHO_AM_I register 0x0F
-           *
-           * Success:
-           * - LED blinks variant number.
-           *
-           * Failure:
-           * - LED blinks slowly forever.
            */
 
-          #include <libopencm3/stm32/rcc.h>
-          #include <libopencm3/stm32/gpio.h>
-          #include <libopencm3/stm32/spi.h>
-          #include <libopencm3/cm3/systick.h>
           #include <stdint.h>
-          #include <stdbool.h>
 
-          #define LED_PORT ${{ matrix.led_port }}
-          #define LED_PIN  ${{ matrix.led_pin }}
+          #define LED_PORT_LETTER '${{ matrix.led_port }}'
+          #define LED_PIN_NUM     ${{ matrix.led_pin }}
+          #define LED_ACTIVE_LOW  ${{ matrix.active_low }}
+
+          #define PERIPH_BASE     0x40000000UL
+          #define AHB1PERIPH_BASE 0x40020000UL
+          #define APB1PERIPH_BASE 0x40000000UL
+          #define APB2PERIPH_BASE 0x40010000UL
+
+          #define RCC_BASE        0x40023800UL
+          #define GPIOA_BASE      0x40020000UL
+          #define GPIOB_BASE      0x40020400UL
+          #define GPIOC_BASE      0x40020800UL
+
+          #define SPI1_BASE       0x40013000UL
+          #define SPI2_BASE       0x40003800UL
+          #define SPI3_BASE       0x40003C00UL
+
+          #define REG32(addr)     (*(volatile uint32_t *)(addr))
+          #define REG16(addr)     (*(volatile uint16_t *)(addr))
+          #define REG8(addr)      (*(volatile uint8_t  *)(addr))
+
+          #define RCC_CR          REG32(RCC_BASE + 0x00)
+          #define RCC_AHB1ENR     REG32(RCC_BASE + 0x30)
+          #define RCC_APB1ENR     REG32(RCC_BASE + 0x40)
+          #define RCC_APB2ENR     REG32(RCC_BASE + 0x44)
+
+          #define GPIO_MODER(p)   REG32((p) + 0x00)
+          #define GPIO_OTYPER(p)  REG32((p) + 0x04)
+          #define GPIO_OSPEEDR(p) REG32((p) + 0x08)
+          #define GPIO_PUPDR(p)   REG32((p) + 0x0C)
+          #define GPIO_IDR(p)     REG32((p) + 0x10)
+          #define GPIO_ODR(p)     REG32((p) + 0x14)
+          #define GPIO_BSRR(p)    REG32((p) + 0x18)
+          #define GPIO_AFRL(p)    REG32((p) + 0x20)
+          #define GPIO_AFRH(p)    REG32((p) + 0x24)
+
+          #define SPI_CR1(s)      REG32((s) + 0x00)
+          #define SPI_CR2(s)      REG32((s) + 0x04)
+          #define SPI_SR(s)       REG32((s) + 0x08)
+          #define SPI_DR(s)       REG32((s) + 0x0C)
+
+          #define SPI_SR_RXNE     (1U << 0)
+          #define SPI_SR_TXE      (1U << 1)
+          #define SPI_SR_BSY      (1U << 7)
 
           #define LSM6DXX_WHOAMI_REG 0x0F
 
-          static volatile uint32_t system_millis = 0;
+          typedef struct {
+              uint32_t port;
+              uint8_t pin;
+          } gpio_pin_t;
 
-          void sys_tick_handler(void)
+          typedef struct {
+              uint32_t spi;
+              uint8_t index;
+          } spi_bus_t;
+
+          static void delay_cycles(volatile uint32_t n)
           {
-              system_millis++;
+              while (n--) {
+                  __asm volatile ("nop");
+              }
           }
 
           static void delay_ms(uint32_t ms)
           {
-              uint32_t start = system_millis;
-              while ((system_millis - start) < ms) {
-                  __asm__("nop");
+              /*
+               * Approx delay on HSI 16MHz.
+               * Not exact, but enough for blinking and SPI pauses.
+               */
+              while (ms--) {
+                  delay_cycles(4000);
               }
           }
 
-          static void clock_setup(void)
+          static uint32_t port_by_letter(char c)
           {
-              rcc_clock_setup_pll(&rcc_hse_8mhz_3v3[RCC_CLOCK_3V3_168MHZ]);
+              if (c == 'A') return GPIOA_BASE;
+              if (c == 'B') return GPIOB_BASE;
+              return GPIOC_BASE;
+          }
 
-              systick_set_clocksource(STK_CSR_CLKSOURCE_AHB);
-              systick_set_reload(168000 - 1);
-              systick_interrupt_enable();
-              systick_counter_enable();
+          static void gpio_output(uint32_t port, uint8_t pin)
+          {
+              GPIO_MODER(port) &= ~(3U << (pin * 2));
+              GPIO_MODER(port) |=  (1U << (pin * 2));
 
-              rcc_periph_clock_enable(RCC_GPIOA);
-              rcc_periph_clock_enable(RCC_GPIOB);
-              rcc_periph_clock_enable(RCC_GPIOC);
+              GPIO_OTYPER(port) &= ~(1U << pin);
 
-              rcc_periph_clock_enable(RCC_SPI1);
-              rcc_periph_clock_enable(RCC_SPI2);
-              rcc_periph_clock_enable(RCC_SPI3);
+              GPIO_OSPEEDR(port) &= ~(3U << (pin * 2));
+              GPIO_OSPEEDR(port) |=  (2U << (pin * 2));
+
+              GPIO_PUPDR(port) &= ~(3U << (pin * 2));
+          }
+
+          static void gpio_af(uint32_t port, uint8_t pin, uint8_t af)
+          {
+              GPIO_MODER(port) &= ~(3U << (pin * 2));
+              GPIO_MODER(port) |=  (2U << (pin * 2));
+
+              GPIO_OTYPER(port) &= ~(1U << pin);
+
+              GPIO_OSPEEDR(port) &= ~(3U << (pin * 2));
+              GPIO_OSPEEDR(port) |=  (3U << (pin * 2));
+
+              GPIO_PUPDR(port) &= ~(3U << (pin * 2));
+
+              if (pin < 8) {
+                  GPIO_AFRL(port) &= ~(0xFU << (pin * 4));
+                  GPIO_AFRL(port) |=  ((uint32_t)af << (pin * 4));
+              } else {
+                  uint8_t p = pin - 8;
+                  GPIO_AFRH(port) &= ~(0xFU << (p * 4));
+                  GPIO_AFRH(port) |=  ((uint32_t)af << (p * 4));
+              }
+          }
+
+          static void gpio_set_pin(uint32_t port, uint8_t pin)
+          {
+              GPIO_BSRR(port) = (1U << pin);
+          }
+
+          static void gpio_clear_pin(uint32_t port, uint8_t pin)
+          {
+              GPIO_BSRR(port) = (1U << (pin + 16));
+          }
+
+          static uint32_t led_port(void)
+          {
+              return port_by_letter(LED_PORT_LETTER);
           }
 
           static void led_setup(void)
           {
-              gpio_mode_setup(LED_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, LED_PIN);
-              gpio_set_output_options(LED_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, LED_PIN);
-              gpio_set(LED_PORT, LED_PIN);
+              gpio_output(led_port(), LED_PIN_NUM);
           }
 
           static void led_on(void)
           {
-              gpio_clear(LED_PORT, LED_PIN);
+              if (LED_ACTIVE_LOW) {
+                  gpio_clear_pin(led_port(), LED_PIN_NUM);
+              } else {
+                  gpio_set_pin(led_port(), LED_PIN_NUM);
+              }
           }
 
           static void led_off(void)
           {
-              gpio_set(LED_PORT, LED_PIN);
+              if (LED_ACTIVE_LOW) {
+                  gpio_set_pin(led_port(), LED_PIN_NUM);
+              } else {
+                  gpio_clear_pin(led_port(), LED_PIN_NUM);
+              }
           }
 
           static void blink_short(void)
@@ -168,124 +266,115 @@ jobs:
               }
           }
 
-          typedef struct {
-              uint32_t port;
-              uint16_t pin;
-          } gpio_pin_t;
-
-          typedef struct {
-              uint32_t spi;
-              uint8_t bus_number;
-          } spi_bus_t;
-
           static const spi_bus_t spi_buses[] = {
-              { SPI1, 1 },
-              { SPI2, 2 },
-              { SPI3, 3 },
+              { SPI1_BASE, 1 },
+              { SPI2_BASE, 2 },
+              { SPI3_BASE, 3 },
           };
 
           static const gpio_pin_t cs_pins[] = {
-              { GPIOA, GPIO4  },   // 1 / 11 / 21
-              { GPIOA, GPIO15 },   // 2 / 12 / 22
-              { GPIOB, GPIO0  },   // 3 / 13 / 23
-              { GPIOB, GPIO1  },   // 4 / 14 / 24
-              { GPIOB, GPIO2  },   // 5 / 15 / 25
-              { GPIOB, GPIO12 },   // 6 / 16 / 26
-              { GPIOC, GPIO4  },   // 7 / 17 / 27
-              { GPIOC, GPIO13 },   // 8 / 18 / 28
-              { GPIOC, GPIO14 },   // 9 / 19 / 29
-              { GPIOC, GPIO15 },   // 10 / 20 / 30
+              { GPIOA_BASE, 4  },
+              { GPIOA_BASE, 15 },
+              { GPIOB_BASE, 0  },
+              { GPIOB_BASE, 1  },
+              { GPIOB_BASE, 2  },
+              { GPIOB_BASE, 12 },
+              { GPIOC_BASE, 4  },
+              { GPIOC_BASE, 13 },
+              { GPIOC_BASE, 14 },
+              { GPIOC_BASE, 15 },
           };
+
+          static void clocks_setup(void)
+          {
+              /*
+               * Use default HSI 16MHz.
+               * Enable GPIOA/B/C and SPI1/2/3 clocks.
+               */
+              RCC_AHB1ENR |= (1U << 0) | (1U << 1) | (1U << 2);
+              RCC_APB2ENR |= (1U << 12); // SPI1
+              RCC_APB1ENR |= (1U << 14) | (1U << 15); // SPI2/SPI3
+
+              delay_ms(10);
+          }
 
           static void cs_setup_all(void)
           {
               for (unsigned i = 0; i < sizeof(cs_pins) / sizeof(cs_pins[0]); i++) {
-                  gpio_mode_setup(cs_pins[i].port, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, cs_pins[i].pin);
-                  gpio_set_output_options(cs_pins[i].port, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, cs_pins[i].pin);
-                  gpio_set(cs_pins[i].port, cs_pins[i].pin);
+                  gpio_output(cs_pins[i].port, cs_pins[i].pin);
+                  gpio_set_pin(cs_pins[i].port, cs_pins[i].pin);
               }
           }
 
           static void cs_low(gpio_pin_t cs)
           {
-              gpio_clear(cs.port, cs.pin);
+              gpio_clear_pin(cs.port, cs.pin);
           }
 
           static void cs_high(gpio_pin_t cs)
           {
-              gpio_set(cs.port, cs.pin);
+              gpio_set_pin(cs.port, cs.pin);
           }
 
           static void spi_gpio_setup(uint32_t spi)
           {
-              if (spi == SPI1) {
-                  /*
-                   * SPI1:
-                   * SCK  PA5
-                   * MISO PA6
-                   * MOSI PA7
-                   */
-                  gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO5 | GPIO6 | GPIO7);
-                  gpio_set_af(GPIOA, GPIO_AF5, GPIO5 | GPIO6 | GPIO7);
-                  gpio_set_output_options(GPIOA, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO5 | GPIO6 | GPIO7);
-              } else if (spi == SPI2) {
-                  /*
-                   * SPI2:
-                   * SCK  PB13
-                   * MISO PB14
-                   * MOSI PB15
-                   */
-                  gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO13 | GPIO14 | GPIO15);
-                  gpio_set_af(GPIOB, GPIO_AF5, GPIO13 | GPIO14 | GPIO15);
-                  gpio_set_output_options(GPIOB, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO13 | GPIO14 | GPIO15);
-              } else if (spi == SPI3) {
-                  /*
-                   * SPI3:
-                   * SCK  PC10
-                   * MISO PC11
-                   * MOSI PC12
-                   */
-                  gpio_mode_setup(GPIOC, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO10 | GPIO11 | GPIO12);
-                  gpio_set_af(GPIOC, GPIO_AF6, GPIO10 | GPIO11 | GPIO12);
-                  gpio_set_output_options(GPIOC, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO10 | GPIO11 | GPIO12);
+              if (spi == SPI1_BASE) {
+                  // SPI1 AF5: PA5 SCK, PA6 MISO, PA7 MOSI
+                  gpio_af(GPIOA_BASE, 5, 5);
+                  gpio_af(GPIOA_BASE, 6, 5);
+                  gpio_af(GPIOA_BASE, 7, 5);
+              } else if (spi == SPI2_BASE) {
+                  // SPI2 AF5: PB13 SCK, PB14 MISO, PB15 MOSI
+                  gpio_af(GPIOB_BASE, 13, 5);
+                  gpio_af(GPIOB_BASE, 14, 5);
+                  gpio_af(GPIOB_BASE, 15, 5);
+              } else if (spi == SPI3_BASE) {
+                  // SPI3 AF6: PC10 SCK, PC11 MISO, PC12 MOSI
+                  gpio_af(GPIOC_BASE, 10, 6);
+                  gpio_af(GPIOC_BASE, 11, 6);
+                  gpio_af(GPIOC_BASE, 12, 6);
               }
           }
 
           static void spi_setup(uint32_t spi)
           {
-              spi_disable(spi);
+              SPI_CR1(spi) = 0;
+              SPI_CR2(spi) = 0;
 
-              spi_init_master(
-                  spi,
-                  SPI_CR1_BAUDRATE_FPCLK_DIV_256,
-                  SPI_CR1_CPOL_CLK_TO_1_WHEN_IDLE,
-                  SPI_CR1_CPHA_CLK_TRANSITION_2,
-                  SPI_CR1_DFF_8BIT,
-                  SPI_CR1_MSBFIRST
-              );
+              /*
+               * Master, software NSS, NSS high, slow baud,
+               * CPOL=1, CPHA=1 for many ST IMUs.
+               */
+              SPI_CR1(spi) =
+                  (1U << 2) |   // MSTR
+                  (7U << 3) |   // BR = fPCLK/256
+                  (1U << 8) |   // SSI
+                  (1U << 9) |   // SSM
+                  (1U << 1) |   // CPOL
+                  (1U << 0);    // CPHA
 
-              spi_set_full_duplex_mode(spi);
-              spi_enable_software_slave_management(spi);
-              spi_set_nss_high(spi);
-              spi_enable(spi);
+              SPI_CR1(spi) |= (1U << 6); // SPE
           }
 
           static uint8_t spi_xfer8(uint32_t spi, uint8_t data)
           {
-              return spi_xfer(spi, data);
+              while (!(SPI_SR(spi) & SPI_SR_TXE)) {}
+              *((volatile uint8_t *)(spi + 0x0C)) = data;
+
+              while (!(SPI_SR(spi) & SPI_SR_RXNE)) {}
+              return *((volatile uint8_t *)(spi + 0x0C));
           }
 
           static uint8_t read_whoami(uint32_t spi, gpio_pin_t cs)
           {
               uint8_t value;
 
+              cs_high(cs);
+              delay_ms(1);
+
               cs_low(cs);
               delay_ms(1);
 
-              /*
-               * LSM6DXX SPI read:
-               * register address | 0x80
-               */
               spi_xfer8(spi, LSM6DXX_WHOAMI_REG | 0x80);
               value = spi_xfer8(spi, 0x00);
 
@@ -296,7 +385,7 @@ jobs:
               return value;
           }
 
-          static bool is_lsm6dxx_id(uint8_t id)
+          static uint8_t is_lsm6dxx_id(uint8_t id)
           {
               return id == 0x69 ||
                      id == 0x6A ||
@@ -307,8 +396,10 @@ jobs:
 
           int main(void)
           {
-              clock_setup();
+              clocks_setup();
               led_setup();
+              led_off();
+
               cs_setup_all();
 
               delay_ms(1000);
@@ -324,25 +415,131 @@ jobs:
                   for (unsigned c = 0; c < sizeof(cs_pins) / sizeof(cs_pins[0]); c++) {
                       gpio_pin_t cs = cs_pins[c];
 
-                      for (uint8_t attempt = 0; attempt < 8; attempt++) {
+                      for (uint8_t attempt = 0; attempt < 10; attempt++) {
                           uint8_t id = read_whoami(spi, cs);
 
                           if (is_lsm6dxx_id(id)) {
                               blink_code(variant);
                           }
 
-                          delay_ms(25);
+                          delay_ms(20);
                       }
 
                       variant++;
                   }
 
-                  spi_disable(spi);
+                  SPI_CR1(spi) &= ~(1U << 6);
               }
 
               blink_code(0);
+          }
+          EOF
 
-              return 0;
+          cat > ${PROJECT}/startup.c <<'EOF'
+          #include <stdint.h>
+
+          extern int main(void);
+
+          extern uint32_t _estack;
+          extern uint32_t _sidata;
+          extern uint32_t _sdata;
+          extern uint32_t _edata;
+          extern uint32_t _sbss;
+          extern uint32_t _ebss;
+
+          void reset_handler(void);
+          void default_handler(void);
+
+          __attribute__((section(".isr_vector")))
+          void (* const vector_table[])(void) = {
+              (void (*)(void))(&_estack),
+              reset_handler,
+              default_handler,
+              default_handler,
+              default_handler,
+              default_handler,
+              default_handler,
+              0,
+              0,
+              0,
+              0,
+              default_handler,
+              default_handler,
+              0,
+              default_handler,
+              default_handler,
+          };
+
+          void reset_handler(void)
+          {
+              uint32_t *src = &_sidata;
+              uint32_t *dst = &_sdata;
+
+              while (dst < &_edata) {
+                  *dst++ = *src++;
+              }
+
+              dst = &_sbss;
+
+              while (dst < &_ebss) {
+                  *dst++ = 0;
+              }
+
+              main();
+
+              while (1) {}
+          }
+
+          void default_handler(void)
+          {
+              while (1) {}
+          }
+          EOF
+
+          cat > ${PROJECT}/linker.ld <<'EOF'
+          MEMORY
+          {
+              FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
+              RAM (xrw)   : ORIGIN = 0x20000000, LENGTH = 128K
+          }
+
+          _estack = ORIGIN(RAM) + LENGTH(RAM);
+
+          SECTIONS
+          {
+              .isr_vector :
+              {
+                  KEEP(*(.isr_vector))
+              } > FLASH
+
+              .text :
+              {
+                  *(.text*)
+                  *(.rodata*)
+                  . = ALIGN(4);
+                  _etext = .;
+              } > FLASH
+
+              _sidata = LOADADDR(.data);
+
+              .data : AT(_etext)
+              {
+                  . = ALIGN(4);
+                  _sdata = .;
+                  *(.data*)
+                  . = ALIGN(4);
+                  _edata = .;
+              } > RAM
+
+              .bss :
+              {
+                  . = ALIGN(4);
+                  _sbss = .;
+                  *(.bss*)
+                  *(COMMON)
+                  . = ALIGN(4);
+                  _ebss = .;
+              } > RAM
           }
           EOF
 
@@ -350,32 +547,21 @@ jobs:
           PROJECT = scanner
           BUILD_DIR = build
 
-          CFILES = main.c
-
-          OPENCM3_DIR = ../libopencm3
-          LDSCRIPT = $(OPENCM3_DIR)/lib/stm32/f4/stm32f405xg.ld
-
           PREFIX ?= arm-none-eabi
-
           CC = $(PREFIX)-gcc
           OBJCOPY = $(PREFIX)-objcopy
           SIZE = $(PREFIX)-size
 
-          CFLAGS += -Os -g
-          CFLAGS += -Wall -Wextra
-          CFLAGS += -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
-          CFLAGS += -DSTM32F4
-          CFLAGS += -I$(OPENCM3_DIR)/include
+          CFLAGS = -Os -g -Wall -Wextra \
+              -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 \
+              -ffreestanding -nostdlib
 
-          LDFLAGS += -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
-          LDFLAGS += -T$(LDSCRIPT)
-          LDFLAGS += -nostartfiles
-          LDFLAGS += -Wl,--gc-sections
-          LDFLAGS += -L$(OPENCM3_DIR)/lib
+          LDFLAGS = -Tlinker.ld \
+              -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 \
+              -nostdlib -Wl,--gc-sections
 
-          LDLIBS += -lopencm3_stm32f4
-
-          OBJS = $(CFILES:%.c=$(BUILD_DIR)/%.o)
+          SRCS = startup.c main.c
+          OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 
           all: $(BUILD_DIR)/$(PROJECT).elf $(BUILD_DIR)/$(PROJECT).bin $(BUILD_DIR)/$(PROJECT).hex
           	$(SIZE) $(BUILD_DIR)/$(PROJECT).elf
@@ -387,7 +573,7 @@ jobs:
           	$(CC) $(CFLAGS) -c $< -o $@
 
           $(BUILD_DIR)/$(PROJECT).elf: $(OBJS)
-          	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
+          	$(CC) $(LDFLAGS) $^ -o $@
 
           $(BUILD_DIR)/$(PROJECT).bin: $(BUILD_DIR)/$(PROJECT).elf
           	$(OBJCOPY) -O binary $< $@
@@ -409,12 +595,12 @@ jobs:
         run: |
           mkdir -p out
 
-          cp ${PROJECT}/build/scanner.bin out/STM32F405_LSM6DXX_SCANNER_V2_${{ matrix.led_name }}.bin
-          cp ${PROJECT}/build/scanner.hex out/STM32F405_LSM6DXX_SCANNER_V2_${{ matrix.led_name }}.hex
-          cp ${PROJECT}/build/scanner.elf out/STM32F405_LSM6DXX_SCANNER_V2_${{ matrix.led_name }}.elf
+          cp ${PROJECT}/build/scanner.bin out/STM32F405_LSM6DXX_SCANNER_V3_${{ matrix.led_name }}.bin
+          cp ${PROJECT}/build/scanner.hex out/STM32F405_LSM6DXX_SCANNER_V3_${{ matrix.led_name }}.hex
+          cp ${PROJECT}/build/scanner.elf out/STM32F405_LSM6DXX_SCANNER_V3_${{ matrix.led_name }}.elf
 
           cat > out/README_${{ matrix.led_name }}.txt <<'EOF'
-          STM32F405 LSM6DXX LOW LEVEL SCANNER V2
+          STM32F405 LSM6DXX BAREMETAL SCANNER V3
 
           Diagnostic firmware only.
           Do not fly.
@@ -423,19 +609,27 @@ jobs:
           LED variant:
           ${{ matrix.led_name }}
 
-          What it does:
-          - Scans SPI1/SPI2/SPI3
-          - Tries CS pins:
-            PA4, PA15, PB0, PB1, PB2, PB12, PC4, PC13, PC14, PC15
-          - Reads LSM6DXX WHO_AM_I register 0x0F
-          - Accepts:
+          What it scans:
+          - SPI1:
+            SCK PA5, MISO PA6, MOSI PA7
+          - SPI2:
+            SCK PB13, MISO PB14, MOSI PB15
+          - SPI3:
+            SCK PC10, MISO PC11, MOSI PC12
+
+          CS pins:
+          PA4, PA15, PB0, PB1, PB2, PB12, PC4, PC13, PC14, PC15
+
+          WHO_AM_I:
+          - register 0x0F
+          - accepted IDs:
             0x69, 0x6A, 0x6B, 0x6C, 0x6D
 
           Result:
-          - If sensor found:
+          - Sensor found:
             LED blinks variant number repeatedly.
-          - If not found:
-            LED blinks slowly forever.
+          - Not found:
+            LED slow-blinks forever.
 
           Variant mapping:
            1  = SPI1 PA4
@@ -473,15 +667,13 @@ jobs:
 
           How to use:
           1. Put board in DFU mode.
-          2. Flash this HEX.
+          2. Flash HEX.
           3. Watch LED.
-          4. Count short blinks between long pauses.
-          5. Tell ChatGPT the blink number.
+          4. Count short blinks between pauses.
+          5. Send blink number to ChatGPT.
 
           If no LED blinks:
-          - Try another LED variant.
-          - There are 4 LED variants in artifacts:
-            LED_PC13, LED_PB2, LED_PB9, LED_PA8
+          Try another LED variant.
           EOF
 
           ls -lah out
@@ -489,5 +681,5 @@ jobs:
       - name: Upload scanner
         uses: actions/upload-artifact@v4
         with:
-          name: STM32F405-LSM6DXX-SCANNER-V2-${{ matrix.led_name }}
+          name: STM32F405-LSM6DXX-SCANNER-V3-${{ matrix.led_name }}
           path: out/*
