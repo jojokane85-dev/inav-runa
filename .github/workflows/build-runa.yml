@@ -1,4 +1,4 @@
-name: Build RUNA FC45 TRUE 8.0.1 V7
+name: Build RUNA FC45 BLUEBERRY V8
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
 
     env:
       INAV_VERSION: 8.0.1
-      BASE_TARGET: SPEEDYBEEF405WING
+      BASE_TARGET: BLUEBERRYF435WING
       TARGET: CADDXF405_45_WING
       RUNA_NAME: CADDX45+RUNA
 
@@ -52,7 +52,6 @@ jobs:
 
           for i in 1 2 3 4 5; do
             echo "Clone attempt $i"
-
             git clone \
               --branch ${INAV_VERSION} \
               --depth 1 \
@@ -67,20 +66,24 @@ jobs:
           done
 
           test -d inav || exit 1
-
           cd inav
-          echo "Commit:"
           git rev-parse HEAD
 
-      - name: Create CADDXF405_45_WING target from SPEEDYBEEF405WING
+      - name: Check BLUEBERRY target
         run: |
           cd inav
 
+          echo "Available BLUEBERRY / F405 / WING targets:"
+          find src/main/target -maxdepth 1 -type d | grep -i -E "BLUE|BERRY|F405|F435|WING" || true
+
           if [ ! -d "src/main/target/${BASE_TARGET}" ]; then
-            echo "ERROR: base target not found: ${BASE_TARGET}"
-            find src/main/target -maxdepth 1 -type d | grep -i -E "SPEEDY|F405|WING" || true
+            echo "ERROR: ${BASE_TARGET} not found in INAV ${INAV_VERSION}"
             exit 1
           fi
+
+      - name: Create CADDXF405_45_WING from BLUEBERRYF435WING
+        run: |
+          cd inav
 
           rm -rf src/main/target/${TARGET}
           cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
@@ -89,9 +92,13 @@ jobs:
             sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
           fi
 
-          echo "Created target ${TARGET} from ${BASE_TARGET}"
+          if [ -f "src/main/target/${TARGET}/target.mk" ]; then
+            sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/target.mk
+          fi
 
-      - name: Patch target.h hardware from working FC4.5
+          echo "Created ${TARGET} from ${BASE_TARGET}"
+
+      - name: Patch target.h for RUNA FC4.5 BLUEBERRY V8
         run: |
           cd inav
 
@@ -102,60 +109,36 @@ jobs:
 
           target = os.environ["TARGET"]
           imu_align = "${{ matrix.imu_align }}"
-          path = Path(f"src/main/target/{target}/target.h")
 
+          path = Path(f"src/main/target/{target}/target.h")
           if not path.exists():
               raise SystemExit(f"target.h not found: {path}")
 
           text = path.read_text(encoding="utf-8", errors="ignore")
 
-          text = re.sub(
-              r'#define\s+TARGET_BOARD_IDENTIFIER\s+"[^"]+"',
-              '#define TARGET_BOARD_IDENTIFIER "C45W"',
-              text
-          )
-
-          text = re.sub(
-              r'#define\s+USBD_PRODUCT_STRING\s+"[^"]+"',
-              '#define USBD_PRODUCT_STRING "CADDXF405_45_WING"',
-              text
-          )
-
+          # Clean conflicting definitions from base target.
           remove_patterns = [
+              r'^\s*#define\s+TARGET_BOARD_IDENTIFIER\s+"[^"]+"\s*$',
+              r'^\s*#define\s+USBD_PRODUCT_STRING\s+"[^"]+"\s*$',
+
               r'^\s*#define\s+USE_IMU_MPU6000\s*$',
-              r'^\s*#define\s+MPU6000_CS_PIN\s+\S+\s*$',
-              r'^\s*#define\s+MPU6000_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+MPU6000_EXTI_PIN\s+\S+\s*$',
-              r'^\s*#define\s+IMU_MPU6000_ALIGN\s+\S+\s*$',
-
               r'^\s*#define\s+USE_IMU_MPU6500\s*$',
-              r'^\s*#define\s+MPU6500_CS_PIN\s+\S+\s*$',
-              r'^\s*#define\s+MPU6500_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+MPU6500_EXTI_PIN\s+\S+\s*$',
-              r'^\s*#define\s+IMU_MPU6500_ALIGN\s+\S+\s*$',
-
               r'^\s*#define\s+USE_IMU_BMI270\s*$',
-              r'^\s*#define\s+BMI270_CS_PIN\s+\S+\s*$',
-              r'^\s*#define\s+BMI270_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+BMI270_EXTI_PIN\s+\S+\s*$',
-              r'^\s*#define\s+IMU_BMI270_ALIGN\s+\S+\s*$',
-
               r'^\s*#define\s+USE_IMU_ICM42605\s*$',
-              r'^\s*#define\s+ICM42605_CS_PIN\s+\S+\s*$',
-              r'^\s*#define\s+ICM42605_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+ICM42605_EXTI_PIN\s+\S+\s*$',
-              r'^\s*#define\s+IMU_ICM42605_ALIGN\s+\S+\s*$',
-
               r'^\s*#define\s+USE_IMU_ICM42688P\s*$',
-              r'^\s*#define\s+ICM42688P_CS_PIN\s+\S+\s*$',
-              r'^\s*#define\s+ICM42688P_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+ICM42688P_EXTI_PIN\s+\S+\s*$',
-              r'^\s*#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*$',
-
               r'^\s*#define\s+USE_IMU_LSM6DXX\s*$',
-              r'^\s*#define\s+LSM6DXX_CS_PIN\s+\S+\s*$',
-              r'^\s*#define\s+LSM6DXX_SPI_BUS\s+\S+\s*$',
-              r'^\s*#define\s+LSM6DXX_EXTI_PIN\s+\S+\s*$',
+
+              r'^\s*#define\s+MPU6000_.*$',
+              r'^\s*#define\s+MPU6500_.*$',
+              r'^\s*#define\s+BMI270_.*$',
+              r'^\s*#define\s+ICM42605_.*$',
+              r'^\s*#define\s+ICM42688P_.*$',
+              r'^\s*#define\s+LSM6DXX_.*$',
+              r'^\s*#define\s+IMU_MPU6000_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+IMU_MPU6500_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+IMU_BMI270_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+IMU_ICM42605_ALIGN\s+\S+\s*$',
+              r'^\s*#define\s+IMU_ICM42688P_ALIGN\s+\S+\s*$',
               r'^\s*#define\s+IMU_LSM6DXX_ALIGN\s+\S+\s*$',
 
               r'^\s*#define\s+SPI1_SCK_PIN\s+\S+\s*$',
@@ -187,11 +170,7 @@ jobs:
               r'^\s*#define\s+USE_MAG_HMC5883\s*$',
               r'^\s*#define\s+USE_MAG_QMC5883\s*$',
               r'^\s*#define\s+USE_MAG_IST8310\s*$',
-              r'^\s*#define\s+USE_MAG_IST8308\s*$',
-              r'^\s*#define\s+USE_MAG_MAG3110\s*$',
               r'^\s*#define\s+USE_MAG_LIS3MDL\s*$',
-              r'^\s*#define\s+USE_MAG_AK8963\s*$',
-              r'^\s*#define\s+USE_MAG_AK8975\s*$',
               r'^\s*#define\s+MAG_I2C_BUS\s+\S+\s*$',
 
               r'^\s*#define\s+USE_MAX7456\s*$',
@@ -210,31 +189,30 @@ jobs:
           for pattern in remove_patterns:
               text = re.sub(pattern, "", text, flags=re.M)
 
-          add = f"""
+          text += f"""
 
           /*
-           * RUNA FC4.5 TRUE 8.0.1 V7
+           * RUNA FC4.5 BLUEBERRY V8
            *
-           * Working FC data:
+           * Base target: BLUEBERRYF435WING
+           * Working FC4.5 data:
            * GYRO/ACC: LSM6DXX
-           * BARO    : DPS310
-           * MAG     : HMC5883
+           * BARO: DPS310
+           * MAG: HMC5883
            *
            * Resource:
-           * PA4  = MPU CS
-           * PA5  = SPI1 SCK
-           * PA6  = SPI1 MISO
-           * PA7  = SPI1 MOSI
-           * PB8  = I2C1 SCL
-           * PB9  = I2C1 SDA
+           * PA4 = MPU CS
+           * PA5/PA6/PA7 = SPI1
+           * PB8/PB9 = I2C1
            * PB12 = OSD CS
-           * PB13 = SPI2 SCK
-           * PC2  = SPI2 MISO
-           * PC3  = SPI2 MOSI
+           * PB13/PC2/PC3 = SPI2
            * PC15 = BEEPER
            * PA14 = LED1
            * PA13 = LED2
            */
+
+          #define TARGET_BOARD_IDENTIFIER "C45W"
+          #define USBD_PRODUCT_STRING "CADDXF405_45_WING"
 
           #define USE_SPI
           #define USE_SPI_DEVICE_1
@@ -260,9 +238,9 @@ jobs:
           #define I2C1_SDA_PIN PB9
 
           #define USE_IMU_LSM6DXX
-          #define IMU_LSM6DXX_ALIGN {imu_align}
-          #define LSM6DXX_CS_PIN PA4
           #define LSM6DXX_SPI_BUS BUS_SPI1
+          #define LSM6DXX_CS_PIN PA4
+          #define IMU_LSM6DXX_ALIGN {imu_align}
 
           #define USE_BARO
           #define USE_BARO_DPS310
@@ -285,22 +263,13 @@ jobs:
           #define SDCARD_SPI_CS_PIN PC14
           """
 
-          text += add
           path.write_text(text, encoding="utf-8")
 
-          print("===== target.h important lines =====")
+          print("===== RUNA V8 target.h important lines =====")
           for line in text.splitlines():
-              if any(x in line for x in [
+              if any(k in line for k in [
                   "TARGET_BOARD_IDENTIFIER",
                   "USBD_PRODUCT_STRING",
-                  "SPI1_SCK_PIN",
-                  "SPI1_MISO_PIN",
-                  "SPI1_MOSI_PIN",
-                  "SPI2_SCK_PIN",
-                  "SPI2_MISO_PIN",
-                  "SPI2_MOSI_PIN",
-                  "I2C1_SCL",
-                  "I2C1_SDA",
                   "USE_IMU_LSM6DXX",
                   "LSM6DXX_SPI_BUS",
                   "LSM6DXX_CS_PIN",
@@ -309,106 +278,12 @@ jobs:
                   "BARO_I2C_BUS",
                   "USE_MAG_HMC5883",
                   "MAG_I2C_BUS",
-                  "USE_MAX7456",
-                  "MAX7456_SPI_BUS",
-                  "MAX7456_CS_PIN",
+                  "MAX7456",
                   "BEEPER_PIN",
                   "LED0_PIN",
                   "LED1_PIN",
-                  "SDCARD_SPI_CS_PIN",
               ]):
                   print(line)
-          PY
-
-      - name: Patch target.c manual LSM6DXX registration V7
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import os
-          import re
-
-          target = os.environ["TARGET"]
-          path = Path(f"src/main/target/{target}/target.c")
-
-          if path.exists():
-              text = path.read_text(encoding="utf-8", errors="ignore")
-          else:
-              text = ""
-
-          remove_includes = [
-              'platform.h',
-              'target.h',
-              'common/axis.h',
-              'drivers/io.h',
-              'drivers/bus.h',
-              'drivers/bus_spi.h',
-          ]
-
-          for inc in remove_includes:
-              text = re.sub(rf'^\s*#include\s+"{re.escape(inc)}"\s*\n', '', text, flags=re.M)
-
-          includes = (
-              '#include "platform.h"\n'
-              '#include "common/axis.h"\n'
-              '#include "drivers/io.h"\n'
-              '#include "drivers/bus.h"\n'
-              '#include "target.h"\n'
-              '\n'
-          )
-
-          text = includes + text
-
-          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*mpu.*\n', '', text, flags=re.M | re.I)
-          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*icm.*\n', '', text, flags=re.M | re.I)
-          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*bmi.*\n', '', text, flags=re.M | re.I)
-          text = re.sub(r'^.*BUSDEV_REGISTER_SPI.*busdev_.*lsm.*\n', '', text, flags=re.M | re.I)
-
-          devhw = "DEVHW_LSM6D"
-
-          text += "\n"
-          text += "/* RUNA FC4.5 TRUE 8.0.1 V7 manual LSM6DXX IMU registration */\n"
-          text += f"BUSDEV_REGISTER_SPI_TAG(busdev_lsm6dxx_runa, {devhw}, LSM6DXX_SPI_BUS, LSM6DXX_CS_PIN, NONE, 0, DEVFLAGS_NONE, 0);\n"
-
-          path.write_text(text, encoding="utf-8")
-
-          print("===== target.c patched V7 =====")
-          print(text)
-          PY
-
-      - name: Patch common_hardware duplicate LSM6DXX safety
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/main/target/common_hardware.c")
-
-          if not path.exists():
-              print("common_hardware.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8", errors="ignore")
-          marker = "RUNA_DISABLE_COMMON_LSM6DXX_REG"
-
-          if marker not in text:
-              lines = []
-
-              for line in text.splitlines():
-                  low = line.lower()
-
-                  if "busdev" in low and "lsm" in low and "busdev_register_spi" in low:
-                      lines.append("/* " + marker + " " + line + " */")
-                  else:
-                      lines.append(line)
-
-              text = "\n".join(lines) + "\n"
-              path.write_text(text, encoding="utf-8")
-              print("common_hardware LSM6DXX registration disabled if present")
-          else:
-              print("common_hardware LSM6DXX already disabled")
           PY
 
       - name: Patch RUNA name in MSP
@@ -417,8 +292,8 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
-          import re
           import os
+          import re
 
           runa_name = os.environ["RUNA_NAME"]
           path = Path("src/main/fc/fc_msp.c")
@@ -435,7 +310,6 @@ jobs:
           ]
 
           patched = 0
-
           for pattern in patterns:
               if re.search(pattern, text):
                   replacement = f'''const char *runaTargetName = "{runa_name}";
@@ -447,47 +321,6 @@ jobs:
 
           path.write_text(text, encoding="utf-8")
           print("MSP RUNA name patch count:", patched)
-          PY
-
-      - name: Patch startup OSD text
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/main/io/osd.c")
-
-          if not path.exists():
-              print("osd.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8", errors="ignore")
-
-          variants = [
-              'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);',
-              'tfp_sprintf(string_buffer, "INAV %s", FC_VERSION_STRING);',
-          ]
-
-          patched = False
-
-          for old in variants:
-              if old in text:
-                  text = text.replace(old, 'tfp_sprintf(string_buffer, "RUNA45 8.0.1");', 1)
-                  patched = True
-                  break
-
-          if patched:
-              text = text.replace(
-                  'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
-                  'uint8_t xPos = OSD_CENTER_S(string_buffer);',
-                  1
-              )
-              print("Startup OSD text patched")
-          else:
-              print("WARNING: startup text pattern not found")
-
-          path.write_text(text, encoding="utf-8")
           PY
 
       - name: Configure CMake
@@ -505,8 +338,7 @@ jobs:
             echo "Target found: ${TARGET}"
           else
             echo "TARGET NOT FOUND: ${TARGET}"
-            echo "Similar targets:"
-            make help | grep -i -E "CADDX|SPEEDY|F405|WING" || true
+            make help | grep -i -E "CADDX|BLUE|BERRY|F405|F435|WING" || true
             exit 1
           fi
 
@@ -530,7 +362,7 @@ jobs:
 
           while IFS= read -r f; do
             base="$(basename "$f")"
-            dst="out/RUNA_FC45_TRUE_8_0_1_V7_${{ matrix.name }}_${base}"
+            dst="out/RUNA_FC45_BLUEBERRY_V8_${{ matrix.name }}_${base}"
             cp "$f" "$dst"
             echo "Copied: $dst"
             FOUND=$((FOUND + 1))
@@ -542,10 +374,10 @@ jobs:
             exit 1
           fi
 
-          cat > out/RUNA_FC45_TRUE_8_0_1_V7_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
+          cat > out/RUNA_FC45_BLUEBERRY_V8_${{ matrix.name }}_BASE_NO_GPS.cli <<'EOF'
           batch start
 
-          # RUNA FC4.5 TRUE 8.0.1 V7
+          # RUNA FC4.5 BLUEBERRY V8
           # Variant: ${{ matrix.name }}
           # IMU align: ${{ matrix.imu_align }}
 
@@ -556,14 +388,13 @@ jobs:
           feature BLACKBOX
           feature AIRMODE
           feature PWM_OUTPUT_ENABLE
-          feature VTX
 
           serial 20 1 115200 115200 0 115200
           serial 0 64 115200 115200 0 115200
           serial 1 0 115200 115200 0 115200
           serial 2 2 115200 115200 0 115200
           serial 3 0 115200 115200 0 115200
-          serial 4 4096 115200 115200 0 115200
+          serial 4 0 115200 115200 0 115200
           serial 5 1 115200 115200 0 115200
 
           set acc_hardware = LSM6DXX
@@ -588,38 +419,14 @@ jobs:
           set accgain_y = 4096
           set accgain_z = 4096
 
-          set gyro_main_lpf_hz = 25
-          set dynamic_gyro_notch_enabled = ON
-          set dynamic_gyro_notch_q = 120
-          set dynamic_gyro_notch_min_hz = 50
-          set acc_lpf_hz = 15
-
-          set vbat_adc_channel = 1
           set rssi_adc_channel = 4
-          set current_adc_channel = 2
           set airspeed_adc_channel = 3
-
-          set receiver_type = SERIAL
-          set serialrx_provider = CRSF
-          set rc_filter_auto = ON
-
-          set nav_extra_arming_safety = OFF
-          set gps_auto_config = OFF
-          set gps_auto_baud = OFF
-          set gps_min_sats = 0
-          set failsafe_procedure = NONE
 
           set small_angle = 25
           set ahrs_acc_ignore_rate = 15
           set ahrs_acc_ignore_slope = 5
 
           set vtx_smartaudio_alternate_softserial_method = ON
-          set vtx_low_power_disarm = ON
-          set vtx_power = 5
-
-          set vtx_frequency_group = FREQUENCYGROUP_5G8
-          set vtx_band = 4
-          set vtx_channel = 5
 
           control_profile 1
           set fw_p_pitch = 5
@@ -635,25 +442,23 @@ jobs:
           save
           EOF
 
-          cat > out/README_RUNA_FC45_TRUE_8_0_1_V7_${{ matrix.name }}.txt <<'EOF'
-          RUNA FC45 TRUE 8.0.1 V7
+          cat > out/README_RUNA_FC45_BLUEBERRY_V8_${{ matrix.name }}.txt <<'EOF'
+          RUNA FC45 BLUEBERRY V8
 
-          Uses working FC4.5 data:
-          - INAV 8.0.1
+          Base:
+          - BLUEBERRYF435WING
+
+          Target:
+          - CADDXF405_45_WING
+
+          Hardware from working FC4.5:
           - GYRO/ACC: LSM6DXX
           - BARO: DPS310
           - MAG: HMC5883
-          - IMU: SPI1 PA4
+          - IMU: SPI1 / PA4
           - I2C1: PB8/PB9
-          - OSD: MAX7456 SPI2 PB12
+          - OSD: MAX7456 SPI2 / PB12
           - BEEPER: PC15
-          - LED: PA14 / PA13
-
-          V7 changes:
-          - manual target.c LSM6DXX SPI registration
-          - fixed CW0_DEG undeclared error by using numeric align 0 in BUSDEV registration
-          - no FLIP align variants
-          - no fake LSM6DXX detect
 
           Flash:
           1. INAV Configurator 8.x
@@ -691,5 +496,5 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-TRUE-8-0-1-V7-${{ matrix.name }}
+          name: RUNA-FC45-BLUEBERRY-V8-${{ matrix.name }}
           path: out/*
