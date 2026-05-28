@@ -1,4 +1,4 @@
-name: Build STM32F405 LSM6DXX BEEPER Scanner
+name: Build STM32F405 LSM6DXX BEEPER Scanner V2
 
 on:
   workflow_dispatch:
@@ -85,7 +85,7 @@ jobs:
             active_low: 0
 
     env:
-      PROJECT: stm32f405_lsm6dxx_beeper_scanner
+      PROJECT: stm32f405_lsm6dxx_beeper_scanner_v2
 
     steps:
       - name: Install deps
@@ -103,16 +103,24 @@ jobs:
 
           cat > ${PROJECT}/main.c <<'EOF'
           /*
-           * STM32F405 LSM6DXX BEEPER scanner
+           * STM32F405 LSM6DXX BEEPER scanner V2
            *
            * Diagnostic only.
            * Do not fly.
            * Do not install propeller.
            *
-           * Output:
-           * - startup: 3 short beeps
-           * - found: N short beeps, pause, repeat
-           * - not found: long beep, pause, repeat
+           * Startup:
+           *   3 short beeps = firmware started.
+           *
+           * Not found:
+           *   long beep, pause, repeat.
+           *
+           * Found:
+           *   long beeps  = SPI config number
+           *   short beeps = CS pin number
+           *
+           * Example:
+           *   2 long + 6 short = SPI config 2, CS 6
            */
 
           #include <stdint.h>
@@ -160,8 +168,18 @@ jobs:
 
           typedef struct {
               uint32_t spi;
-              uint8_t index;
-          } spi_bus_t;
+              uint32_t sck_port;
+              uint8_t sck_pin;
+              uint8_t sck_af;
+              uint32_t miso_port;
+              uint8_t miso_pin;
+              uint8_t miso_af;
+              uint32_t mosi_port;
+              uint8_t mosi_pin;
+              uint8_t mosi_af;
+              uint8_t mode;
+              uint8_t config_number;
+          } spi_config_t;
 
           static void delay_cycles(volatile uint32_t n)
           {
@@ -263,9 +281,9 @@ jobs:
           static void beep_long(void)
           {
               beeper_on();
-              delay_ms(600);
+              delay_ms(550);
               beeper_off();
-              delay_ms(600);
+              delay_ms(300);
           }
 
           static void startup_beep(void)
@@ -276,47 +294,71 @@ jobs:
               delay_ms(1000);
           }
 
-          static void beep_code(uint8_t code)
+          static void beep_not_found(void)
           {
-              if (code == 0) {
-                  while (1) {
-                      beep_long();
-                  }
-              }
-
               while (1) {
-                  for (uint8_t i = 0; i < code; i++) {
-                      beep_short();
-                  }
-
-                  delay_ms(1500);
+                  beep_long();
+                  delay_ms(1200);
               }
           }
 
-          static const spi_bus_t spi_buses[] = {
-              { SPI1_BASE, 1 },
-              { SPI2_BASE, 2 },
-              { SPI3_BASE, 3 },
-          };
+          static void beep_found(uint8_t spi_config_number, uint8_t cs_number)
+          {
+              while (1) {
+                  for (uint8_t i = 0; i < spi_config_number; i++) {
+                      beep_long();
+                  }
+
+                  delay_ms(900);
+
+                  for (uint8_t i = 0; i < cs_number; i++) {
+                      beep_short();
+                  }
+
+                  delay_ms(1800);
+              }
+          }
 
           static const gpio_pin_t cs_pins[] = {
-              { GPIOA_BASE, 4  },
-              { GPIOA_BASE, 15 },
-              { GPIOB_BASE, 0  },
-              { GPIOB_BASE, 1  },
-              { GPIOB_BASE, 2  },
-              { GPIOB_BASE, 12 },
-              { GPIOC_BASE, 4  },
-              { GPIOC_BASE, 13 },
-              { GPIOC_BASE, 14 },
-              { GPIOC_BASE, 15 },
+              { GPIOA_BASE, 4  },  // CS 1
+              { GPIOA_BASE, 15 },  // CS 2
+              { GPIOB_BASE, 0  },  // CS 3
+              { GPIOB_BASE, 1  },  // CS 4
+              { GPIOB_BASE, 2  },  // CS 5
+              { GPIOB_BASE, 12 },  // CS 6
+              { GPIOC_BASE, 4  },  // CS 7
+              { GPIOC_BASE, 13 },  // CS 8
+              { GPIOC_BASE, 14 },  // CS 9
+              { GPIOC_BASE, 15 },  // CS 10
+          };
+
+          static const spi_config_t spi_configs[] = {
+              // MODE3 configs: CPOL=1 CPHA=1
+              { SPI1_BASE, GPIOA_BASE, 5, 5, GPIOA_BASE, 6, 5, GPIOA_BASE, 7, 5, 3, 1 },
+              { SPI1_BASE, GPIOB_BASE, 3, 5, GPIOB_BASE, 4, 5, GPIOB_BASE, 5, 5, 3, 2 },
+
+              { SPI2_BASE, GPIOB_BASE, 13, 5, GPIOB_BASE, 14, 5, GPIOB_BASE, 15, 5, 3, 3 },
+              { SPI2_BASE, GPIOB_BASE, 10, 5, GPIOB_BASE, 14, 5, GPIOB_BASE, 15, 5, 3, 4 },
+
+              { SPI3_BASE, GPIOC_BASE, 10, 6, GPIOC_BASE, 11, 6, GPIOC_BASE, 12, 6, 3, 5 },
+              { SPI3_BASE, GPIOB_BASE, 3, 6, GPIOB_BASE, 4, 6, GPIOB_BASE, 5, 6, 3, 6 },
+
+              // MODE0 configs: CPOL=0 CPHA=0
+              { SPI1_BASE, GPIOA_BASE, 5, 5, GPIOA_BASE, 6, 5, GPIOA_BASE, 7, 5, 0, 7 },
+              { SPI1_BASE, GPIOB_BASE, 3, 5, GPIOB_BASE, 4, 5, GPIOB_BASE, 5, 5, 0, 8 },
+
+              { SPI2_BASE, GPIOB_BASE, 13, 5, GPIOB_BASE, 14, 5, GPIOB_BASE, 15, 5, 0, 9 },
+              { SPI2_BASE, GPIOB_BASE, 10, 5, GPIOB_BASE, 14, 5, GPIOB_BASE, 15, 5, 0, 10 },
+
+              { SPI3_BASE, GPIOC_BASE, 10, 6, GPIOC_BASE, 11, 6, GPIOC_BASE, 12, 6, 0, 11 },
+              { SPI3_BASE, GPIOB_BASE, 3, 6, GPIOB_BASE, 4, 6, GPIOB_BASE, 5, 6, 0, 12 },
           };
 
           static void clocks_setup(void)
           {
               RCC_AHB1ENR |= (1U << 0) | (1U << 1) | (1U << 2);
-              RCC_APB2ENR |= (1U << 12);
-              RCC_APB1ENR |= (1U << 14) | (1U << 15);
+              RCC_APB2ENR |= (1U << 12);              // SPI1
+              RCC_APB1ENR |= (1U << 14) | (1U << 15); // SPI2/SPI3
               delay_ms(10);
           }
 
@@ -338,25 +380,17 @@ jobs:
               gpio_set_pin(cs.port, cs.pin);
           }
 
-          static void spi_gpio_setup(uint32_t spi)
+          static void spi_gpio_setup(const spi_config_t *cfg)
           {
-              if (spi == SPI1_BASE) {
-                  gpio_af(GPIOA_BASE, 5, 5);
-                  gpio_af(GPIOA_BASE, 6, 5);
-                  gpio_af(GPIOA_BASE, 7, 5);
-              } else if (spi == SPI2_BASE) {
-                  gpio_af(GPIOB_BASE, 13, 5);
-                  gpio_af(GPIOB_BASE, 14, 5);
-                  gpio_af(GPIOB_BASE, 15, 5);
-              } else if (spi == SPI3_BASE) {
-                  gpio_af(GPIOC_BASE, 10, 6);
-                  gpio_af(GPIOC_BASE, 11, 6);
-                  gpio_af(GPIOC_BASE, 12, 6);
-              }
+              gpio_af(cfg->sck_port, cfg->sck_pin, cfg->sck_af);
+              gpio_af(cfg->miso_port, cfg->miso_pin, cfg->miso_af);
+              gpio_af(cfg->mosi_port, cfg->mosi_pin, cfg->mosi_af);
           }
 
-          static void spi_setup(uint32_t spi)
+          static void spi_setup(const spi_config_t *cfg)
           {
+              uint32_t spi = cfg->spi;
+
               SPI_CR1(spi) = 0;
               SPI_CR2(spi) = 0;
 
@@ -364,11 +398,14 @@ jobs:
                   (1U << 2) |   // Master
                   (7U << 3) |   // BR /256
                   (1U << 8) |   // SSI
-                  (1U << 9) |   // SSM
-                  (1U << 1) |   // CPOL
-                  (1U << 0);    // CPHA
+                  (1U << 9);    // SSM
 
-              SPI_CR1(spi) |= (1U << 6);
+              if (cfg->mode == 3) {
+                  SPI_CR1(spi) |= (1U << 1); // CPOL
+                  SPI_CR1(spi) |= (1U << 0); // CPHA
+              }
+
+              SPI_CR1(spi) |= (1U << 6); // SPE
           }
 
           static uint8_t spi_xfer8(uint32_t spi, uint8_t data)
@@ -394,7 +431,7 @@ jobs:
               return *((volatile uint8_t *)(spi + 0x0C));
           }
 
-          static uint8_t read_whoami(uint32_t spi, gpio_pin_t cs)
+          static uint8_t read_whoami(const spi_config_t *cfg, gpio_pin_t cs)
           {
               uint8_t value;
 
@@ -404,8 +441,8 @@ jobs:
               cs_low(cs);
               delay_ms(1);
 
-              spi_xfer8(spi, LSM6DXX_WHOAMI_REG | 0x80);
-              value = spi_xfer8(spi, 0x00);
+              spi_xfer8(cfg->spi, LSM6DXX_WHOAMI_REG | 0x80);
+              value = spi_xfer8(cfg->spi, 0x00);
 
               delay_ms(1);
               cs_high(cs);
@@ -431,37 +468,33 @@ jobs:
               startup_beep();
 
               cs_setup_all();
-
               delay_ms(1000);
 
-              uint8_t variant = 1;
+              for (unsigned s = 0; s < sizeof(spi_configs) / sizeof(spi_configs[0]); s++) {
+                  const spi_config_t *cfg = &spi_configs[s];
 
-              for (unsigned b = 0; b < sizeof(spi_buses) / sizeof(spi_buses[0]); b++) {
-                  uint32_t spi = spi_buses[b].spi;
-
-                  spi_gpio_setup(spi);
-                  spi_setup(spi);
+                  spi_gpio_setup(cfg);
+                  spi_setup(cfg);
 
                   for (unsigned c = 0; c < sizeof(cs_pins) / sizeof(cs_pins[0]); c++) {
                       gpio_pin_t cs = cs_pins[c];
+                      uint8_t cs_number = c + 1;
 
-                      for (uint8_t attempt = 0; attempt < 10; attempt++) {
-                          uint8_t id = read_whoami(spi, cs);
+                      for (uint8_t attempt = 0; attempt < 12; attempt++) {
+                          uint8_t id = read_whoami(cfg, cs);
 
                           if (is_lsm6dxx_id(id)) {
-                              beep_code(variant);
+                              beep_found(cfg->config_number, cs_number);
                           }
 
                           delay_ms(20);
                       }
-
-                      variant++;
                   }
 
-                  SPI_CR1(spi) &= ~(1U << 6);
+                  SPI_CR1(cfg->spi) &= ~(1U << 6);
               }
 
-              beep_code(0);
+              beep_not_found();
           }
           EOF
 
@@ -574,7 +607,7 @@ jobs:
           EOF
 
           cat > ${PROJECT}/Makefile <<'EOF'
-          PROJECT = beeper_scanner
+          PROJECT = beeper_scanner_v2
           BUILD_DIR = build
 
           PREFIX ?= arm-none-eabi
@@ -625,64 +658,57 @@ jobs:
         run: |
           mkdir -p out
 
-          cp ${PROJECT}/build/beeper_scanner.bin out/STM32F405_LSM6DXX_BEEPER_SCANNER_${{ matrix.beeper_name }}.bin
-          cp ${PROJECT}/build/beeper_scanner.hex out/STM32F405_LSM6DXX_BEEPER_SCANNER_${{ matrix.beeper_name }}.hex
-          cp ${PROJECT}/build/beeper_scanner.elf out/STM32F405_LSM6DXX_BEEPER_SCANNER_${{ matrix.beeper_name }}.elf
+          cp ${PROJECT}/build/beeper_scanner_v2.bin out/STM32F405_LSM6DXX_BEEPER_SCANNER_V2_${{ matrix.beeper_name }}.bin
+          cp ${PROJECT}/build/beeper_scanner_v2.hex out/STM32F405_LSM6DXX_BEEPER_SCANNER_V2_${{ matrix.beeper_name }}.hex
+          cp ${PROJECT}/build/beeper_scanner_v2.elf out/STM32F405_LSM6DXX_BEEPER_SCANNER_V2_${{ matrix.beeper_name }}.elf
 
           cat > out/README_${{ matrix.beeper_name }}.txt <<'EOF'
-          STM32F405 LSM6DXX BEEPER SCANNER
+          STM32F405 LSM6DXX BEEPER SCANNER V2
 
           Diagnostic only.
           Do not fly.
           Do not install propeller.
 
-          Beeper variant:
-          ${{ matrix.beeper_name }}
-
-          Expected after boot:
+          Startup:
           - 3 short beeps = scanner started.
 
-          Result:
-          - Sensor found:
-            N short beeps, pause, repeat.
-            N = found variant number.
+          Not found:
+          - long beep, pause, repeat.
 
-          - Sensor not found:
-            long beep, pause, repeat.
+          Found:
+          - long beeps  = SPI config number
+          - short beeps = CS pin number
 
-          Variant mapping:
-           1  = SPI1 PA4
-           2  = SPI1 PA15
-           3  = SPI1 PB0
-           4  = SPI1 PB1
-           5  = SPI1 PB2
-           6  = SPI1 PB12
-           7  = SPI1 PC4
-           8  = SPI1 PC13
-           9  = SPI1 PC14
-           10 = SPI1 PC15
+          Example:
+          - 2 long beeps + 6 short beeps
+          - means SPI config 2, CS 6
 
-           11 = SPI2 PA4
-           12 = SPI2 PA15
-           13 = SPI2 PB0
-           14 = SPI2 PB1
-           15 = SPI2 PB2
-           16 = SPI2 PB12
-           17 = SPI2 PC4
-           18 = SPI2 PC13
-           19 = SPI2 PC14
-           20 = SPI2 PC15
+          SPI config numbers:
+          1  = SPI1 PA5/PA6/PA7 MODE3
+          2  = SPI1 PB3/PB4/PB5 MODE3
+          3  = SPI2 PB13/PB14/PB15 MODE3
+          4  = SPI2 PB10/PB14/PB15 MODE3
+          5  = SPI3 PC10/PC11/PC12 MODE3
+          6  = SPI3 PB3/PB4/PB5 MODE3
 
-           21 = SPI3 PA4
-           22 = SPI3 PA15
-           23 = SPI3 PB0
-           24 = SPI3 PB1
-           25 = SPI3 PB2
-           26 = SPI3 PB12
-           27 = SPI3 PC4
-           28 = SPI3 PC13
-           29 = SPI3 PC14
-           30 = SPI3 PC15
+          7  = SPI1 PA5/PA6/PA7 MODE0
+          8  = SPI1 PB3/PB4/PB5 MODE0
+          9  = SPI2 PB13/PB14/PB15 MODE0
+          10 = SPI2 PB10/PB14/PB15 MODE0
+          11 = SPI3 PC10/PC11/PC12 MODE0
+          12 = SPI3 PB3/PB4/PB5 MODE0
+
+          CS numbers:
+          1  = PA4
+          2  = PA15
+          3  = PB0
+          4  = PB1
+          5  = PB2
+          6  = PB12
+          7  = PC4
+          8  = PC13
+          9  = PC14
+          10 = PC15
           EOF
 
           ls -lah out
@@ -690,5 +716,5 @@ jobs:
       - name: Upload beeper scanner
         uses: actions/upload-artifact@v4
         with:
-          name: STM32F405-LSM6DXX-BEEPER-SCANNER-${{ matrix.beeper_name }}
+          name: STM32F405-LSM6DXX-BEEPER-SCANNER-V2-${{ matrix.beeper_name }}
           path: out/*
