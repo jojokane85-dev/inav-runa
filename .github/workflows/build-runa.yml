@@ -1,58 +1,428 @@
-name: Find FC45 Targets Wide
+name: Build RUNA FC45 NEUTRON BASE TEST
 
 on:
   workflow_dispatch:
+  push:
 
 jobs:
-  find:
+  build:
     runs-on: ubuntu-22.04
 
+    env:
+      INAV_VERSION: 7.1.2
+      BASE_TARGET: NEUTRONRCF435WING
+      TARGET: CADDXF405_WING
+      RUNA_NAME: CADDX45+RUNA
+
     steps:
+      - name: Install deps
+        run: |
+          sudo apt-get update -y -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends \
+            git \
+            build-essential \
+            g++ \
+            ruby \
+            cmake \
+            make \
+            gcc-arm-none-eabi \
+            binutils-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-dev \
+            ninja-build \
+            python3 \
+            python3-pip
+
       - name: Clone INAV 7.1.2
         run: |
-          git clone --branch 7.1.2 --depth 1 https://github.com/iNavFlight/inav.git inav
+          set -e
 
-      - name: Find LSM6DXX targets
+          for i in 1 2 3 4 5; do
+            echo "Clone attempt $i"
+
+            git clone \
+              --branch ${INAV_VERSION} \
+              --depth 1 \
+              --single-branch \
+              --config http.version=HTTP/1.1 \
+              --config http.postBuffer=524288000 \
+              https://github.com/iNavFlight/inav.git inav && break
+
+            echo "Clone failed, retrying..."
+            rm -rf inav
+            sleep 10
+          done
+
+          test -d inav || exit 1
+          cd inav
+          git rev-parse HEAD
+
+      - name: Create CADDXF405_WING from NEUTRONRCF435WING
         run: |
           cd inav
 
-          echo "===== TARGETS WITH LSM6DXX ====="
-          for d in src/main/target/*; do
-            if [ -f "$d/target.h" ]; then
-              if grep -q "USE_IMU_LSM6DXX" "$d/target.h"; then
-                echo ""
-                echo "---- $d ----"
-                grep -n -E "TARGET_BOARD_IDENTIFIER|BOARD_NAME|USE_IMU_LSM6DXX|LSM6DXX_SPI_BUS|LSM6DXX_CS_PIN|LSM6DXX_EXTI_PIN|IMU_LSM6DXX_ALIGN|USE_BARO|SPL06|BMP|DPS|USE_MAG|HMC|QMC|MAG_I2C_BUS" "$d/target.h" || true
-              fi
-            fi
-          done
+          if [ ! -d "src/main/target/${BASE_TARGET}" ]; then
+            echo "ERROR: base target not found: ${BASE_TARGET}"
+            find src/main/target -maxdepth 1 -type d | grep -i "NEUTRON" || true
+            exit 1
+          fi
 
-      - name: Find SPL06 targets
+          rm -rf src/main/target/${TARGET}
+          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
+
+          if [ -f "src/main/target/${TARGET}/CMakeLists.txt" ]; then
+            sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
+          fi
+
+          echo "Created ${TARGET} from ${BASE_TARGET}"
+
+      - name: Patch target for RUNA FC45 NEUTRON TEST
         run: |
           cd inav
 
-          echo "===== TARGETS WITH SPL06 ====="
-          for d in src/main/target/*; do
-            if [ -f "$d/target.h" ]; then
-              if grep -q "USE_BARO_SPL06" "$d/target.h"; then
-                echo ""
-                echo "---- $d ----"
-                grep -n -E "TARGET_BOARD_IDENTIFIER|BOARD_NAME|USE_IMU|ICM|BMI|MPU|LSM|USE_BARO_SPL06|BARO_I2C_BUS|USE_MAG|HMC|QMC|MAG_I2C_BUS" "$d/target.h" || true
-              fi
-            fi
-          done
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+          import re
 
-      - name: Find F405 WING targets
+          target = os.environ["TARGET"]
+          path = Path(f"src/main/target/{target}/target.h")
+
+          if not path.exists():
+              raise SystemExit(f"target.h not found: {path}")
+
+          text = path.read_text(encoding="utf-8")
+
+          # Board identity
+          text = re.sub(
+              r'#define\s+TARGET_BOARD_IDENTIFIER\s+"[^"]+"',
+              '#define TARGET_BOARD_IDENTIFIER "CDF4"',
+              text
+          )
+
+          # Убираем старые BARO/MAG, чтобы поставить SPL06 + HMC5883 как у рабочего FC4.5
+          remove_patterns = [
+              r'^\s*#define\s+USE_BARO_BMP280\s*$',
+              r'^\s*#define\s+USE_BARO_DPS310\s*$',
+              r'^\s*#define\s+USE_BARO_MS5611\s*$',
+              r'^\s*#define\s+USE_BARO_BMP085\s*$',
+              r'^\s*#define\s+USE_BARO_ALL\s*$',
+              r'^\s*#define\s+USE_BARO_SPL06\s*$',
+              r'^\s*#define\s+BARO_I2C_BUS\s+\S+\s*$',
+
+              r'^\s*#define\s+USE_MAG_ALL\s*$',
+              r'^\s*#define\s+USE_MAG_HMC5883\s*$',
+              r'^\s*#define\s+USE_MAG_QMC5883\s*$',
+              r'^\s*#define\s+USE_MAG_IST8310\s*$',
+              r'^\s*#define\s+USE_MAG_MAG3110\s*$',
+              r'^\s*#define\s+USE_MAG_LIS3MDL\s*$',
+              r'^\s*#define\s+MAG_I2C_BUS\s+\S+\s*$',
+          ]
+
+          for p in remove_patterns:
+              text = re.sub(p, "", text, flags=re.M)
+
+          # Оставляем LSM6DXX как в NEUTRON:
+          # USE_IMU_LSM6DXX
+          # LSM6DXX_SPI_BUS BUS_SPI1
+          # LSM6DXX_CS_PIN SPI1_NSS_PIN
+          # IMU_LSM6DXX_ALIGN CW0_DEG
+          #
+          # Добавляем SPL06 и HMC5883.
+          text += """
+
+          /*
+           * RUNA FC4.5 NEUTRON BASE TEST
+           *
+           * Base: NEUTRONRCF435WING
+           * IMU: LSM6DXX
+           * SPI: BUS_SPI1
+           * CS : SPI1_NSS_PIN
+           *
+           * Added for CADDX FC4.5:
+           * BARO: SPL06
+           * MAG : HMC5883
+           */
+
+          #define USE_BARO_SPL06
+          #define BARO_I2C_BUS BUS_I2C1
+
+          #define USE_MAG_HMC5883
+          #define MAG_I2C_BUS BUS_I2C1
+          """
+
+          path.write_text(text, encoding="utf-8")
+
+          print("===== target.h important lines =====")
+          for line in text.splitlines():
+              if any(x in line for x in [
+                  "TARGET_BOARD_IDENTIFIER",
+                  "USE_IMU_LSM6DXX",
+                  "LSM6DXX_SPI_BUS",
+                  "LSM6DXX_CS_PIN",
+                  "IMU_LSM6DXX_ALIGN",
+                  "USE_BARO_SPL06",
+                  "BARO_I2C_BUS",
+                  "USE_MAG_HMC5883",
+                  "MAG_I2C_BUS",
+              ]):
+                  print(line)
+          PY
+
+      - name: Patch LSM6DXX gyroAlign fix
         run: |
           cd inav
 
-          echo "===== F405 / WING TARGETS ====="
-          for d in src/main/target/*; do
-            if [ -f "$d/target.h" ]; then
-              if echo "$d" | grep -qi -E "F405|WING"; then
-                echo ""
-                echo "---- $d ----"
-                grep -n -E "TARGET_BOARD_IDENTIFIER|BOARD_NAME|STM32F405|USE_IMU|ICM|BMI|MPU|LSM|USE_BARO|SPL06|BMP|DPS|USE_MAG|HMC|QMC" "$d/target.h" || true
-              fi
-            fi
-          done
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
+
+          if not path.exists():
+              raise SystemExit("ERROR: accgyro_lsm6dxx.c not found")
+
+          text = path.read_text(encoding="utf-8")
+          fix = "gyro->gyroAlign = gyro->busDev->param;"
+
+          if fix not in text:
+              old = "gyro->intStatusFn = gyroCheckDataReady;"
+              new = "gyro->intStatusFn = gyroCheckDataReady;\n    gyro->gyroAlign = gyro->busDev->param;"
+
+              if old not in text:
+                  raise SystemExit("ERROR: Pattern not found")
+
+              text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+              print("LSM6DXX gyroAlign fix added")
+          else:
+              print("LSM6DXX gyroAlign fix already present")
+          PY
+
+      - name: Patch RUNA name in MSP
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          import os
+
+          runa_name = os.environ["RUNA_NAME"]
+          path = Path("src/main/fc/fc_msp.c")
+
+          if not path.exists():
+              print("fc_msp.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
+
+          replacement = f'''const char *runaTargetName = "{runa_name}";
+                  sbufWriteU8(dst, strlen(runaTargetName));
+                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));'''
+
+          text, count = re.subn(pattern, replacement, text, count=1)
+          path.write_text(text, encoding="utf-8")
+
+          print("MSP RUNA name patch count:", count)
+          PY
+
+      - name: Patch startup OSD text
+        run: |
+          cd inav
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/main/io/osd.c")
+
+          if not path.exists():
+              print("osd.c not found, skip")
+              raise SystemExit(0)
+
+          text = path.read_text(encoding="utf-8")
+
+          old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
+          new = 'tfp_sprintf(string_buffer, "RUNA45 NTRN");'
+
+          if old in text:
+              text = text.replace(old, new, 1)
+              text = text.replace(
+                  'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
+                  'uint8_t xPos = OSD_CENTER_S(string_buffer);',
+                  1
+              )
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Configure CMake
+        run: |
+          cd inav
+          mkdir -p build
+          cd build
+          cmake ..
+
+      - name: Check target exists
+        run: |
+          cd inav/build
+
+          if make help | grep -w "${TARGET}"; then
+            echo "Target found: ${TARGET}"
+          else
+            echo "TARGET NOT FOUND: ${TARGET}"
+            make help | grep -i -E "CADDX|NEUTRON|F435|F405|WING" || true
+            exit 1
+          fi
+
+      - name: Build firmware
+        run: |
+          cd inav/build
+          make clean_${TARGET} || true
+          make ${TARGET} -j2 VERBOSE=1
+
+      - name: Find built files
+        if: always()
+        run: |
+          echo "Built firmware files:"
+          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+
+      - name: Collect firmware and CLI
+        run: |
+          mkdir -p out
+
+          FOUND=0
+
+          while IFS= read -r f; do
+            base="$(basename "$f")"
+            dst="out/RUNA_FC45_NEUTRON_TEST_${base}"
+            cp "$f" "$dst"
+            echo "Copied: $dst"
+            FOUND=$((FOUND + 1))
+          done < <(find inav/build -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
+
+          if [ "$FOUND" -eq 0 ]; then
+            echo "ERROR: no firmware files found"
+            find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
+            exit 1
+          fi
+
+          cat > out/RUNA_FC45_NEUTRON_TEST_BASE_NO_GPS.cli <<'EOF'
+          batch start
+
+          # RUNA FC4.5 NEUTRON BASE TEST
+          # Diagnostic only. Do not fly yet.
+          #
+          # Base target: NEUTRONRCF435WING
+          # New target: CADDXF405_WING
+          # IMU: LSM6DXX
+          # BARO: SPL06
+          # MAG: HMC5883
+
+          feature -GPS
+          feature OSD
+          feature PWM_OUTPUT_ENABLE
+          feature TELEMETRY
+          feature CURRENT_METER
+          feature BLACKBOX
+
+          # CRSF receiver
+          serial 1 2 115200 115200 0 115200
+
+          set acc_hardware = LSM6DXX
+          set baro_hardware = SPL06
+          set mag_hardware = HMC5883
+          set align_mag = CW0FLIP
+
+          set align_board_roll = 0
+          set align_board_pitch = 0
+          set align_board_yaw = 1800
+
+          set gyro_zero_x = 0
+          set gyro_zero_y = 0
+          set gyro_zero_z = 0
+
+          set acczero_x = 0
+          set acczero_y = 0
+          set acczero_z = 0
+
+          set accgain_x = 4096
+          set accgain_y = 4096
+          set accgain_z = 4096
+
+          set vbat_adc_channel = 1
+          set rssi_adc_channel = 4
+          set current_adc_channel = 2
+          set airspeed_adc_channel = 3
+
+          set receiver_type = SERIAL
+          set serialrx_provider = CRSF
+
+          set nav_extra_arming_safety = OFF
+          set failsafe_procedure = NONE
+          set small_angle = 180
+
+          save
+          EOF
+
+          cat > out/README_RUNA_FC45_NEUTRON_TEST.txt <<'EOF'
+          RUNA FC45 NEUTRON BASE TEST
+
+          This is NOT final firmware.
+          Do not fly.
+          Do not install propeller.
+
+          Source:
+          - INAV 7.1.2
+          - Base target: NEUTRONRCF435WING
+          - Created target: CADDXF405_WING
+
+          Expected hardware:
+          - IMU: LSM6DXX
+          - BARO: SPL06
+          - MAG: HMC5883
+
+          Flash:
+          1. INAV Configurator 7.1.x
+          2. DFU
+          3. Full Chip Erase
+          4. Flash RUNA_FC45_NEUTRON_TEST_*.hex
+
+          After flash:
+          1. CLI:
+             defaults
+             save
+
+          2. Wait 15 seconds without touching board.
+
+          3. Apply:
+             RUNA_FC45_NEUTRON_TEST_BASE_NO_GPS.cli
+
+          4. Calibration -> Calibrate Accelerometer
+
+          5. Check:
+             status
+             get align_board
+
+          Good result:
+          - GYRO=OK
+          - ACC=OK
+          - BARO=OK
+          - MAG=OK
+          - 3D model does NOT spin fast
+
+          Bad result:
+          - GYRO=UNAVAILABLE
+          - ACC=UNAVAILABLE
+          - 3D model spins fast
+          - HWFAIL
+          EOF
+
+          ls -lah out
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: RUNA-FC45-NEUTRON-TEST
+          path: out/*
