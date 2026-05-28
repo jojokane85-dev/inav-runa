@@ -1,4 +1,4 @@
-name: Build RUNA FC45 NEUTRON BASE TEST
+name: Build STM32F405 LSM6DXX Low Level Scanner
 
 on:
   workflow_dispatch:
@@ -8,421 +8,514 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # LED variants
+          - led_name: LED_PC13
+            led_port: GPIOC
+            led_pin: GPIO13
+
+          - led_name: LED_PB2
+            led_port: GPIOB
+            led_pin: GPIO2
+
+          - led_name: LED_PB9
+            led_port: GPIOB
+            led_pin: GPIO9
+
+          - led_name: LED_PA8
+            led_port: GPIOA
+            led_pin: GPIO8
+
     env:
-      INAV_VERSION: 7.1.2
-      BASE_TARGET: NEUTRONRCF435WING
-      TARGET: CADDXF405_WING
-      RUNA_NAME: CADDX45+RUNA
+      PROJECT: stm32f405_lsm6dxx_scanner
 
     steps:
       - name: Install deps
         run: |
-          sudo apt-get update -y -o Acquire::Retries=3
+          sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
             git \
-            build-essential \
-            g++ \
-            ruby \
-            cmake \
             make \
             gcc-arm-none-eabi \
             binutils-arm-none-eabi \
             libnewlib-arm-none-eabi \
-            libstdc++-arm-none-eabi-dev \
-            ninja-build \
-            python3 \
-            python3-pip
+            python3
 
-      - name: Clone INAV 7.1.2
+      - name: Clone libopencm3
         run: |
-          set -e
+          git clone --depth 1 https://github.com/libopencm3/libopencm3.git
+          cd libopencm3
+          make -j2
 
-          for i in 1 2 3 4 5; do
-            echo "Clone attempt $i"
-
-            git clone \
-              --branch ${INAV_VERSION} \
-              --depth 1 \
-              --single-branch \
-              --config http.version=HTTP/1.1 \
-              --config http.postBuffer=524288000 \
-              https://github.com/iNavFlight/inav.git inav && break
-
-            echo "Clone failed, retrying..."
-            rm -rf inav
-            sleep 10
-          done
-
-          test -d inav || exit 1
-          cd inav
-          git rev-parse HEAD
-
-      - name: Create CADDXF405_WING from NEUTRONRCF435WING
+      - name: Create scanner source
         run: |
-          cd inav
+          mkdir -p ${PROJECT}
 
-          if [ ! -d "src/main/target/${BASE_TARGET}" ]; then
-            echo "ERROR: base target not found: ${BASE_TARGET}"
-            find src/main/target -maxdepth 1 -type d | grep -i "NEUTRON" || true
-            exit 1
-          fi
-
-          rm -rf src/main/target/${TARGET}
-          cp -R src/main/target/${BASE_TARGET} src/main/target/${TARGET}
-
-          if [ -f "src/main/target/${TARGET}/CMakeLists.txt" ]; then
-            sed -i "s/${BASE_TARGET}/${TARGET}/g" src/main/target/${TARGET}/CMakeLists.txt
-          fi
-
-          echo "Created ${TARGET} from ${BASE_TARGET}"
-
-      - name: Patch target for RUNA FC45 NEUTRON TEST
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import os
-          import re
-
-          target = os.environ["TARGET"]
-          path = Path(f"src/main/target/{target}/target.h")
-
-          if not path.exists():
-              raise SystemExit(f"target.h not found: {path}")
-
-          text = path.read_text(encoding="utf-8")
-
-          # Board identity
-          text = re.sub(
-              r'#define\s+TARGET_BOARD_IDENTIFIER\s+"[^"]+"',
-              '#define TARGET_BOARD_IDENTIFIER "CDF4"',
-              text
-          )
-
-          # Убираем старые BARO/MAG, чтобы поставить SPL06 + HMC5883 как у рабочего FC4.5
-          remove_patterns = [
-              r'^\s*#define\s+USE_BARO_BMP280\s*$',
-              r'^\s*#define\s+USE_BARO_DPS310\s*$',
-              r'^\s*#define\s+USE_BARO_MS5611\s*$',
-              r'^\s*#define\s+USE_BARO_BMP085\s*$',
-              r'^\s*#define\s+USE_BARO_ALL\s*$',
-              r'^\s*#define\s+USE_BARO_SPL06\s*$',
-              r'^\s*#define\s+BARO_I2C_BUS\s+\S+\s*$',
-
-              r'^\s*#define\s+USE_MAG_ALL\s*$',
-              r'^\s*#define\s+USE_MAG_HMC5883\s*$',
-              r'^\s*#define\s+USE_MAG_QMC5883\s*$',
-              r'^\s*#define\s+USE_MAG_IST8310\s*$',
-              r'^\s*#define\s+USE_MAG_MAG3110\s*$',
-              r'^\s*#define\s+USE_MAG_LIS3MDL\s*$',
-              r'^\s*#define\s+MAG_I2C_BUS\s+\S+\s*$',
-          ]
-
-          for p in remove_patterns:
-              text = re.sub(p, "", text, flags=re.M)
-
-          # Оставляем LSM6DXX как в NEUTRON:
-          # USE_IMU_LSM6DXX
-          # LSM6DXX_SPI_BUS BUS_SPI1
-          # LSM6DXX_CS_PIN SPI1_NSS_PIN
-          # IMU_LSM6DXX_ALIGN CW0_DEG
-          #
-          # Добавляем SPL06 и HMC5883.
-          text += """
-
+          cat > ${PROJECT}/main.c <<'EOF'
           /*
-           * RUNA FC4.5 NEUTRON BASE TEST
+           * STM32F405 LSM6DXX low-level SPI scanner
            *
-           * Base: NEUTRONRCF435WING
-           * IMU: LSM6DXX
-           * SPI: BUS_SPI1
-           * CS : SPI1_NSS_PIN
+           * Diagnostic firmware only.
+           * Do not fly.
            *
-           * Added for CADDX FC4.5:
-           * BARO: SPL06
-           * MAG : HMC5883
+           * It scans SPI1/SPI2/SPI3 with multiple CS pins and reads
+           * LSM6DXX WHO_AM_I register 0x0F.
+           *
+           * Success:
+           *   LED blinks variant number repeatedly.
+           *
+           * Failure:
+           *   LED slow blinking forever.
            */
 
-          #define USE_BARO_SPL06
-          #define BARO_I2C_BUS BUS_I2C1
+          #include <libopencm3/stm32/rcc.h>
+          #include <libopencm3/stm32/gpio.h>
+          #include <libopencm3/stm32/spi.h>
+          #include <libopencm3/cm3/systick.h>
+          #include <stdint.h>
+          #include <stdbool.h>
 
-          #define USE_MAG_HMC5883
-          #define MAG_I2C_BUS BUS_I2C1
-          """
+          #define LED_PORT ${{ matrix.led_port }}
+          #define LED_PIN  ${{ matrix.led_pin }}
 
-          path.write_text(text, encoding="utf-8")
+          #define LSM6DXX_WHOAMI_REG 0x0F
 
-          print("===== target.h important lines =====")
-          for line in text.splitlines():
-              if any(x in line for x in [
-                  "TARGET_BOARD_IDENTIFIER",
-                  "USE_IMU_LSM6DXX",
-                  "LSM6DXX_SPI_BUS",
-                  "LSM6DXX_CS_PIN",
-                  "IMU_LSM6DXX_ALIGN",
-                  "USE_BARO_SPL06",
-                  "BARO_I2C_BUS",
-                  "USE_MAG_HMC5883",
-                  "MAG_I2C_BUS",
-              ]):
-                  print(line)
-          PY
+          static volatile uint32_t system_millis = 0;
 
-      - name: Patch LSM6DXX gyroAlign fix
+          void sys_tick_handler(void)
+          {
+              system_millis++;
+          }
+
+          static void delay_ms(uint32_t ms)
+          {
+              uint32_t start = system_millis;
+              while ((system_millis - start) < ms) {
+                  __asm__("nop");
+              }
+          }
+
+          static void clock_setup(void)
+          {
+              rcc_clock_setup_pll(&rcc_hse_8mhz_3v3[RCC_CLOCK_3V3_168MHZ]);
+
+              systick_set_clocksource(STK_CSR_CLKSOURCE_AHB);
+              systick_set_reload(168000 - 1);
+              systick_interrupt_enable();
+              systick_counter_enable();
+
+              rcc_periph_clock_enable(RCC_GPIOA);
+              rcc_periph_clock_enable(RCC_GPIOB);
+              rcc_periph_clock_enable(RCC_GPIOC);
+
+              rcc_periph_clock_enable(RCC_SPI1);
+              rcc_periph_clock_enable(RCC_SPI2);
+              rcc_periph_clock_enable(RCC_SPI3);
+          }
+
+          static void led_setup(void)
+          {
+              gpio_mode_setup(LED_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, LED_PIN);
+              gpio_set_output_options(LED_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, LED_PIN);
+              gpio_set(LED_PORT, LED_PIN);
+          }
+
+          static void led_on(void)
+          {
+              gpio_clear(LED_PORT, LED_PIN);
+          }
+
+          static void led_off(void)
+          {
+              gpio_set(LED_PORT, LED_PIN);
+          }
+
+          static void blink_short(void)
+          {
+              led_on();
+              delay_ms(120);
+              led_off();
+              delay_ms(180);
+          }
+
+          static void blink_long(void)
+          {
+              led_on();
+              delay_ms(600);
+              led_off();
+              delay_ms(600);
+          }
+
+          static void blink_code(uint8_t code)
+          {
+              if (code == 0) {
+                  while (1) {
+                      blink_long();
+                  }
+              }
+
+              while (1) {
+                  for (uint8_t i = 0; i < code; i++) {
+                      blink_short();
+                  }
+
+                  delay_ms(1400);
+              }
+          }
+
+          typedef struct {
+              uint32_t port;
+              uint16_t pin;
+          } gpio_pin_t;
+
+          typedef struct {
+              uint32_t spi;
+              uint8_t bus_number;
+          } spi_bus_t;
+
+          static const spi_bus_t spi_buses[] = {
+              { SPI1, 1 },
+              { SPI2, 2 },
+              { SPI3, 3 },
+          };
+
+          static const gpio_pin_t cs_pins[] = {
+              { GPIOA, GPIO4  },   // PA4
+              { GPIOA, GPIO15 },   // PA15
+              { GPIOB, GPIO0  },   // PB0
+              { GPIOB, GPIO1  },   // PB1
+              { GPIOB, GPIO2  },   // PB2
+              { GPIOB, GPIO12 },   // PB12
+              { GPIOC, GPIO4  },   // PC4
+              { GPIOC, GPIO13 },   // PC13
+              { GPIOC, GPIO14 },   // PC14
+              { GPIOC, GPIO15 },   // PC15
+          };
+
+          static void cs_setup_all(void)
+          {
+              for (unsigned i = 0; i < sizeof(cs_pins) / sizeof(cs_pins[0]); i++) {
+                  gpio_mode_setup(cs_pins[i].port, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, cs_pins[i].pin);
+                  gpio_set_output_options(cs_pins[i].port, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, cs_pins[i].pin);
+                  gpio_set(cs_pins[i].port, cs_pins[i].pin);
+              }
+          }
+
+          static void cs_low(gpio_pin_t cs)
+          {
+              gpio_clear(cs.port, cs.pin);
+          }
+
+          static void cs_high(gpio_pin_t cs)
+          {
+              gpio_set(cs.port, cs.pin);
+          }
+
+          static void spi_gpio_setup(uint32_t spi)
+          {
+              /*
+               * STM32F405 common SPI pins:
+               *
+               * SPI1:
+               *   SCK  PA5
+               *   MISO PA6
+               *   MOSI PA7
+               *
+               * SPI2:
+               *   SCK  PB13
+               *   MISO PB14
+               *   MOSI PB15
+               *
+               * SPI3:
+               *   SCK  PC10
+               *   MISO PC11
+               *   MOSI PC12
+               */
+
+              if (spi == SPI1) {
+                  gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO5 | GPIO6 | GPIO7);
+                  gpio_set_af(GPIOA, GPIO_AF5, GPIO5 | GPIO6 | GPIO7);
+                  gpio_set_output_options(GPIOA, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO5 | GPIO6 | GPIO7);
+              } else if (spi == SPI2) {
+                  gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO13 | GPIO14 | GPIO15);
+                  gpio_set_af(GPIOB, GPIO_AF5, GPIO13 | GPIO14 | GPIO15);
+                  gpio_set_output_options(GPIOB, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO13 | GPIO14 | GPIO15);
+              } else if (spi == SPI3) {
+                  gpio_mode_setup(GPIOC, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO10 | GPIO11 | GPIO12);
+                  gpio_set_af(GPIOC, GPIO_AF6, GPIO10 | GPIO11 | GPIO12);
+                  gpio_set_output_options(GPIOC, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO10 | GPIO11 | GPIO12);
+              }
+          }
+
+          static void spi_setup(uint32_t spi)
+          {
+              spi_disable(spi);
+              spi_reset(spi);
+
+              spi_init_master(
+                  spi,
+                  SPI_CR1_BAUDRATE_FPCLK_DIV_256,
+                  SPI_CR1_CPOL_CLK_TO_1_WHEN_IDLE,
+                  SPI_CR1_CPHA_CLK_TRANSITION_2,
+                  SPI_CR1_DFF_8BIT,
+                  SPI_CR1_MSBFIRST
+              );
+
+              spi_set_full_duplex_mode(spi);
+              spi_enable_software_slave_management(spi);
+              spi_set_nss_high(spi);
+              spi_enable(spi);
+          }
+
+          static uint8_t spi_xfer8(uint32_t spi, uint8_t data)
+          {
+              spi_send(spi, data);
+              return spi_read(spi);
+          }
+
+          static uint8_t read_whoami(uint32_t spi, gpio_pin_t cs)
+          {
+              uint8_t value;
+
+              cs_low(cs);
+              delay_ms(1);
+
+              /*
+               * LSM6DXX SPI read:
+               * bit7 = 1 for read
+               */
+              spi_xfer8(spi, LSM6DXX_WHOAMI_REG | 0x80);
+              value = spi_xfer8(spi, 0x00);
+
+              delay_ms(1);
+              cs_high(cs);
+              delay_ms(2);
+
+              return value;
+          }
+
+          static bool is_lsm6dxx_id(uint8_t id)
+          {
+              return id == 0x69 ||
+                     id == 0x6A ||
+                     id == 0x6B ||
+                     id == 0x6C ||
+                     id == 0x6D;
+          }
+
+          int main(void)
+          {
+              clock_setup();
+              led_setup();
+              cs_setup_all();
+
+              delay_ms(1000);
+
+              uint8_t variant = 1;
+
+              for (unsigned b = 0; b < sizeof(spi_buses) / sizeof(spi_buses[0]); b++) {
+                  uint32_t spi = spi_buses[b].spi;
+
+                  spi_gpio_setup(spi);
+                  spi_setup(spi);
+
+                  for (unsigned c = 0; c < sizeof(cs_pins) / sizeof(cs_pins[0]); c++) {
+                      gpio_pin_t cs = cs_pins[c];
+
+                      /*
+                       * Do several reads because sensors may need time after boot.
+                       */
+                      for (uint8_t attempt = 0; attempt < 5; attempt++) {
+                          uint8_t id = read_whoami(spi, cs);
+
+                          if (is_lsm6dxx_id(id)) {
+                              /*
+                               * Found.
+                               * Blink variant code forever.
+                               *
+                               * Variant mapping:
+                               *  1  = SPI1 PA4
+                               *  2  = SPI1 PA15
+                               *  3  = SPI1 PB0
+                               *  4  = SPI1 PB1
+                               *  5  = SPI1 PB2
+                               *  6  = SPI1 PB12
+                               *  7  = SPI1 PC4
+                               *  8  = SPI1 PC13
+                               *  9  = SPI1 PC14
+                               *  10 = SPI1 PC15
+                               *  11 = SPI2 PA4
+                               *  ...
+                               *  21 = SPI3 PA4
+                               */
+                              blink_code(variant);
+                          }
+
+                          delay_ms(20);
+                      }
+
+                      variant++;
+                  }
+
+                  spi_disable(spi);
+              }
+
+              /*
+               * Not found.
+               */
+              blink_code(0);
+
+              return 0;
+          }
+          EOF
+
+          cat > ${PROJECT}/Makefile <<'EOF'
+          PROJECT = scanner
+          BUILD_DIR = build
+
+          CFILES = main.c
+
+          DEVICE = stm32f405rg
+          OPENCM3_DIR = ../libopencm3
+
+          LDSCRIPT = $(OPENCM3_DIR)/lib/stm32/f4/stm32f405x6.ld
+
+          PREFIX ?= arm-none-eabi
+
+          CC = $(PREFIX)-gcc
+          OBJCOPY = $(PREFIX)-objcopy
+          SIZE = $(PREFIX)-size
+
+          CFLAGS += -Os -g
+          CFLAGS += -Wall -Wextra
+          CFLAGS += -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
+          CFLAGS += -DSTM32F4
+          CFLAGS += -I$(OPENCM3_DIR)/include
+
+          LDFLAGS += -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
+          LDFLAGS += -T$(LDSCRIPT)
+          LDFLAGS += -nostartfiles
+          LDFLAGS += -Wl,--gc-sections
+          LDFLAGS += -L$(OPENCM3_DIR)/lib
+
+          LDLIBS += -lopencm3_stm32f4
+
+          OBJS = $(CFILES:%.c=$(BUILD_DIR)/%.o)
+
+          all: $(BUILD_DIR)/$(PROJECT).elf $(BUILD_DIR)/$(PROJECT).bin $(BUILD_DIR)/$(PROJECT).hex
+          	$(SIZE) $(BUILD_DIR)/$(PROJECT).elf
+
+          $(BUILD_DIR):
+          	mkdir -p $(BUILD_DIR)
+
+          $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+          	$(CC) $(CFLAGS) -c $< -o $@
+
+          $(BUILD_DIR)/$(PROJECT).elf: $(OBJS)
+          	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
+
+          $(BUILD_DIR)/$(PROJECT).bin: $(BUILD_DIR)/$(PROJECT).elf
+          	$(OBJCOPY) -O binary $< $@
+
+          $(BUILD_DIR)/$(PROJECT).hex: $(BUILD_DIR)/$(PROJECT).elf
+          	$(OBJCOPY) -O ihex $< $@
+
+          clean:
+          	rm -rf $(BUILD_DIR)
+          EOF
+
+      - name: Build scanner
         run: |
-          cd inav
+          cd ${PROJECT}
+          make clean
+          make -j2
 
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/main/drivers/accgyro/accgyro_lsm6dxx.c")
-
-          if not path.exists():
-              raise SystemExit("ERROR: accgyro_lsm6dxx.c not found")
-
-          text = path.read_text(encoding="utf-8")
-          fix = "gyro->gyroAlign = gyro->busDev->param;"
-
-          if fix not in text:
-              old = "gyro->intStatusFn = gyroCheckDataReady;"
-              new = "gyro->intStatusFn = gyroCheckDataReady;\n    gyro->gyroAlign = gyro->busDev->param;"
-
-              if old not in text:
-                  raise SystemExit("ERROR: Pattern not found")
-
-              text = text.replace(old, new, 1)
-              path.write_text(text, encoding="utf-8")
-              print("LSM6DXX gyroAlign fix added")
-          else:
-              print("LSM6DXX gyroAlign fix already present")
-          PY
-
-      - name: Patch RUNA name in MSP
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-          import os
-
-          runa_name = os.environ["RUNA_NAME"]
-          path = Path("src/main/fc/fc_msp.c")
-
-          if not path.exists():
-              print("fc_msp.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8")
-
-          pattern = r'sbufWriteU8\(dst,\s*strlen\(targetName\)\);\s*sbufWriteData\(dst,\s*targetName,\s*strlen\(targetName\)\);'
-
-          replacement = f'''const char *runaTargetName = "{runa_name}";
-                  sbufWriteU8(dst, strlen(runaTargetName));
-                  sbufWriteData(dst, runaTargetName, strlen(runaTargetName));'''
-
-          text, count = re.subn(pattern, replacement, text, count=1)
-          path.write_text(text, encoding="utf-8")
-
-          print("MSP RUNA name patch count:", count)
-          PY
-
-      - name: Patch startup OSD text
-        run: |
-          cd inav
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/main/io/osd.c")
-
-          if not path.exists():
-              print("osd.c not found, skip")
-              raise SystemExit(0)
-
-          text = path.read_text(encoding="utf-8")
-
-          old = 'tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);'
-          new = 'tfp_sprintf(string_buffer, "RUNA45 NTRN");'
-
-          if old in text:
-              text = text.replace(old, new, 1)
-              text = text.replace(
-                  'uint8_t xPos = (osdDisplayPort->cols - 19) / 2;',
-                  'uint8_t xPos = OSD_CENTER_S(string_buffer);',
-                  1
-              )
-
-          path.write_text(text, encoding="utf-8")
-          PY
-
-      - name: Configure CMake
-        run: |
-          cd inav
-          mkdir -p build
-          cd build
-          cmake ..
-
-      - name: Check target exists
-        run: |
-          cd inav/build
-
-          if make help | grep -w "${TARGET}"; then
-            echo "Target found: ${TARGET}"
-          else
-            echo "TARGET NOT FOUND: ${TARGET}"
-            make help | grep -i -E "CADDX|NEUTRON|F435|F405|WING" || true
-            exit 1
-          fi
-
-      - name: Build firmware
-        run: |
-          cd inav/build
-          make clean_${TARGET} || true
-          make ${TARGET} -j2 VERBOSE=1
-
-      - name: Find built files
-        if: always()
-        run: |
-          echo "Built firmware files:"
-          find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
-
-      - name: Collect firmware and CLI
+      - name: Collect artifacts
         run: |
           mkdir -p out
 
-          FOUND=0
+          cp ${PROJECT}/build/scanner.bin out/STM32F405_LSM6DXX_SCANNER_${{ matrix.led_name }}.bin
+          cp ${PROJECT}/build/scanner.hex out/STM32F405_LSM6DXX_SCANNER_${{ matrix.led_name }}.hex
+          cp ${PROJECT}/build/scanner.elf out/STM32F405_LSM6DXX_SCANNER_${{ matrix.led_name }}.elf
 
-          while IFS= read -r f; do
-            base="$(basename "$f")"
-            dst="out/RUNA_FC45_NEUTRON_TEST_${base}"
-            cp "$f" "$dst"
-            echo "Copied: $dst"
-            FOUND=$((FOUND + 1))
-          done < <(find inav/build -type f \( -name "*${TARGET}*.hex" -o -name "*${TARGET}*.bin" -o -name "*${TARGET}*.elf" \))
+          cat > out/README_${{ matrix.led_name }}.txt <<'EOF'
+          STM32F405 LSM6DXX LOW LEVEL SCANNER
 
-          if [ "$FOUND" -eq 0 ]; then
-            echo "ERROR: no firmware files found"
-            find inav/build -type f \( -name "*.hex" -o -name "*.bin" -o -name "*.elf" \) -print || true
-            exit 1
-          fi
-
-          cat > out/RUNA_FC45_NEUTRON_TEST_BASE_NO_GPS.cli <<'EOF'
-          batch start
-
-          # RUNA FC4.5 NEUTRON BASE TEST
-          # Diagnostic only. Do not fly yet.
-          #
-          # Base target: NEUTRONRCF435WING
-          # New target: CADDXF405_WING
-          # IMU: LSM6DXX
-          # BARO: SPL06
-          # MAG: HMC5883
-
-          feature -GPS
-          feature OSD
-          feature PWM_OUTPUT_ENABLE
-          feature TELEMETRY
-          feature CURRENT_METER
-          feature BLACKBOX
-
-          # CRSF receiver
-          serial 1 2 115200 115200 0 115200
-
-          set acc_hardware = LSM6DXX
-          set baro_hardware = SPL06
-          set mag_hardware = HMC5883
-          set align_mag = CW0FLIP
-
-          set align_board_roll = 0
-          set align_board_pitch = 0
-          set align_board_yaw = 1800
-
-          set gyro_zero_x = 0
-          set gyro_zero_y = 0
-          set gyro_zero_z = 0
-
-          set acczero_x = 0
-          set acczero_y = 0
-          set acczero_z = 0
-
-          set accgain_x = 4096
-          set accgain_y = 4096
-          set accgain_z = 4096
-
-          set vbat_adc_channel = 1
-          set rssi_adc_channel = 4
-          set current_adc_channel = 2
-          set airspeed_adc_channel = 3
-
-          set receiver_type = SERIAL
-          set serialrx_provider = CRSF
-
-          set nav_extra_arming_safety = OFF
-          set failsafe_procedure = NONE
-          set small_angle = 180
-
-          save
-          EOF
-
-          cat > out/README_RUNA_FC45_NEUTRON_TEST.txt <<'EOF'
-          RUNA FC45 NEUTRON BASE TEST
-
-          This is NOT final firmware.
+          Diagnostic firmware only.
           Do not fly.
           Do not install propeller.
 
-          Source:
-          - INAV 7.1.2
-          - Base target: NEUTRONRCF435WING
-          - Created target: CADDXF405_WING
+          LED variant:
+          ${{ matrix.led_name }}
 
-          Expected hardware:
-          - IMU: LSM6DXX
-          - BARO: SPL06
-          - MAG: HMC5883
+          What it does:
+          - Scans SPI1/SPI2/SPI3
+          - Tries CS pins:
+            PA4, PA15, PB0, PB1, PB2, PB12, PC4, PC13, PC14, PC15
+          - Reads LSM6DXX WHO_AM_I register 0x0F
+          - Accepts:
+            0x69, 0x6A, 0x6B, 0x6C, 0x6D
 
-          Flash:
-          1. INAV Configurator 7.1.x
-          2. DFU
-          3. Full Chip Erase
-          4. Flash RUNA_FC45_NEUTRON_TEST_*.hex
+          Result:
+          - If sensor found:
+            LED blinks variant number repeatedly.
+          - If not found:
+            LED blinks slowly forever.
 
-          After flash:
-          1. CLI:
-             defaults
-             save
+          Variant mapping:
+           1  = SPI1 PA4
+           2  = SPI1 PA15
+           3  = SPI1 PB0
+           4  = SPI1 PB1
+           5  = SPI1 PB2
+           6  = SPI1 PB12
+           7  = SPI1 PC4
+           8  = SPI1 PC13
+           9  = SPI1 PC14
+           10 = SPI1 PC15
 
-          2. Wait 15 seconds without touching board.
+           11 = SPI2 PA4
+           12 = SPI2 PA15
+           13 = SPI2 PB0
+           14 = SPI2 PB1
+           15 = SPI2 PB2
+           16 = SPI2 PB12
+           17 = SPI2 PC4
+           18 = SPI2 PC13
+           19 = SPI2 PC14
+           20 = SPI2 PC15
 
-          3. Apply:
-             RUNA_FC45_NEUTRON_TEST_BASE_NO_GPS.cli
+           21 = SPI3 PA4
+           22 = SPI3 PA15
+           23 = SPI3 PB0
+           24 = SPI3 PB1
+           25 = SPI3 PB2
+           26 = SPI3 PB12
+           27 = SPI3 PC4
+           28 = SPI3 PC13
+           29 = SPI3 PC14
+           30 = SPI3 PC15
 
-          4. Calibration -> Calibrate Accelerometer
+          How to use:
+          1. Put board in DFU mode.
+          2. Flash this HEX.
+          3. Watch LED.
+          4. Count short blinks between long pauses.
+          5. Tell ChatGPT the blink number.
 
-          5. Check:
-             status
-             get align_board
-
-          Good result:
-          - GYRO=OK
-          - ACC=OK
-          - BARO=OK
-          - MAG=OK
-          - 3D model does NOT spin fast
-
-          Bad result:
-          - GYRO=UNAVAILABLE
-          - ACC=UNAVAILABLE
-          - 3D model spins fast
-          - HWFAIL
+          If no LED blinks:
+          - Try another LED variant.
+          - There are 4 LED variants in artifacts:
+            LED_PC13, LED_PB2, LED_PB9, LED_PA8
           EOF
 
           ls -lah out
 
-      - name: Upload firmware
+      - name: Upload scanner
         uses: actions/upload-artifact@v4
         with:
-          name: RUNA-FC45-NEUTRON-TEST
+          name: STM32F405-LSM6DXX-SCANNER-${{ matrix.led_name }}
           path: out/*
